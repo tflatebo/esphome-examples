@@ -1,7 +1,6 @@
 esphome:
   name: esp32
 
-
 esp32:
   board: esp32s3box
   framework:
@@ -23,7 +22,6 @@ wifi:
     ssid: !secret ap_ssid
     password: !secret ap_password
 
-
 logger:
   level: INFO
 
@@ -40,8 +38,6 @@ time:
   - platform: sntp
     id: sntp_time
     timezone: "America/Chicago"
-
-
 
 # --- DISPLAY HARDWARE ---
 # This board uses an RGB (parallel/MIPI) interface. ESPHome has a preset for
@@ -171,8 +167,6 @@ lvgl:
       text_font: montserrat_216
       align: CENTER
       text_color: 0xFF9933  # Warm amber - optimal for nighttime viewing
-      #text_color: 0xFF7F00  # Orange
-      #text_color: 0xFFBF00  # Amber
 
     - id: temp_desc_style
       text_font: montserrat_24
@@ -275,59 +269,56 @@ lvgl:
                         text: "Indoor"
 
 interval:
+  # Update clock and temperatures every 15 seconds
   - interval: 15s
     then:
       - lambda: |-
+          // Update clock
           std::string t = id(sntp_time).now().strftime("%H:%M");
           lv_label_set_text(id(time_label), t.c_str());
 
-  - interval: 15s
-    then:
-      - lambda: |-
           // Get temperature values from template sensors
           double outf = id(outdoor_temp_f).state;
           double feels = id(outdoor_feels_like_f).state;
           double indoorf = id(indoor_temp_f).state;
 
-          char out_s[32];
-          char feels_s[32];
-          char in_s[32];
-          if (isnan(outf)) sprintf(out_s, "--\u00B0F"); else sprintf(out_s, "%.0f\u00B0F", outf);
-          if (isnan(feels)) sprintf(feels_s, "--\u00B0F"); else sprintf(feels_s, "%.0f\u00B0F", feels);
-          if (isnan(indoorf)) sprintf(in_s, "--\u00B0F"); else sprintf(in_s, "%.0f\u00B0F", indoorf);
+          // Format temperature strings
+          char out_s[32], feels_s[32], in_s[32];
+          sprintf(out_s, isnan(outf) ? "--\u00B0F" : "%.0f\u00B0F", outf);
+          sprintf(feels_s, isnan(feels) ? "--\u00B0F" : "%.0f\u00B0F", feels);
+          sprintf(in_s, isnan(indoorf) ? "--\u00B0F" : "%.0f\u00B0F", indoorf);
 
-          ESP_LOGI("dashboard", "States: outdoor=%f humidity=%f wind=%f outdoor_f=%f feels_f=%f indoor_f=%f", id(outdoor_temp).state, id(outdoor_humidity).state, id(kstp_wind_speed).state, outf, feels, indoorf);
-          // Helper to compute interpolated color and apply to a label
+          ESP_LOGI("dashboard", "T: out=%.0f feels=%.0f in=%.0f", outf, feels, indoorf);
+
+          // Helper to compute temperature color gradient and apply to label
           auto apply_color = [&](auto label_id, double v) {
             uint8_t r = 255, g = 255, b = 255;
             if (!isnan(v)) {
-              if (v <= 0.0) { r = 0; g = 120; b = 255; }
-              else if (v < 32.0) {
-                double t = (v - 0.0) / (32.0 - 0.0);
-                // interpolate bright blue (0,120,255) -> medium blue (0,160,220)
+              if (v <= 0.0) {
+                r = 0; g = 120; b = 255;  // Bright blue
+              } else if (v < 32.0) {
+                double t = v / 32.0;
                 r = 0;
-                g = (uint8_t)round(120 + (160 - 120) * t);
-                b = (uint8_t)round(255 + (220 - 255) * t);
+                g = (uint8_t)round(120 + 40 * t);
+                b = (uint8_t)round(255 - 35 * t);
               } else if (v < 72.0) {
-                double t = (v - 32.0) / (72.0 - 32.0);
-                // interpolate blue (0,160,220) -> green (0,200,0)
+                double t = (v - 32.0) / 40.0;
                 r = 0;
-                g = (uint8_t)round(160 + (200 - 160) * t);
-                b = (uint8_t)round(220 + (0 - 220) * t);
+                g = (uint8_t)round(160 + 40 * t);
+                b = (uint8_t)round(220 - 220 * t);
               } else if (v < 90.0) {
-                double t = (v - 72.0) / (90.0 - 72.0);
-                // interpolate green (0,200,0) -> red (255,40,0)
-                r = (uint8_t)round(0 + (255 - 0) * t);
-                g = (uint8_t)round(200 + (40 - 200) * t);
+                double t = (v - 72.0) / 18.0;
+                r = (uint8_t)round(255 * t);
+                g = (uint8_t)round(200 - 160 * t);
                 b = 0;
-              } else { // v >= 90
-                r = 255; g = 40; b = 0;
+              } else {
+                r = 255; g = 40; b = 0;  // Bright red
               }
             }
             lv_obj_set_style_text_color(label_id, lv_color_make(r, g, b), LV_PART_MAIN);
           };
 
-          // Update text and color for each value label
+          // Update text and color for each temperature label
           lv_label_set_text(id(out_val_label), out_s);
           apply_color(id(out_val_label), outf);
           lv_event_send(id(out_val_label), lvgl::lv_update_event, nullptr);
