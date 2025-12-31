@@ -66,11 +66,7 @@ This project implements a clean, modern dashboard on a 7-inch touchscreen displa
 
 ### Home Assistant Sensors Required
 
-Configure these entities in your Home Assistant:
-- `sensor.garage_temp_sensor_air_temperature` - Outdoor temperature (°F)
-- `sensor.garage_temp_sensor_humidity` - Outdoor humidity (%)
-- `sensor.kstp_wind_speed` - Wind speed (mph)
-- `sensor.bedroom_temperature` - Indoor temperature (°F)
+You'll need to configure these sensor entity IDs in your `secrets.yaml` file (see Installation step 2 below).
 
 ## Installation
 
@@ -81,28 +77,35 @@ git clone <your-repo-url>
 cd esphome-examples
 ```
 
-### 2. Configure WiFi and Passwords
+### 2. Configure Secrets File
 
-Edit [clock-with-temp.yaml](clock-with-temp.yaml) and update:
+Copy the example secrets file and edit it with your credentials:
 
-```yaml
-wifi:
-  ssid: "Your-WiFi-SSID"
-  password: "Your-WiFi-Password"
+```bash
+cp secrets.yaml.example secrets.yaml
 ```
 
-### 3. Update Sensor Entities
-
-If your Home Assistant sensor names differ, update the `entity_id` values in the `sensor:` section:
+Edit `secrets.yaml` with your actual values:
 
 ```yaml
-sensor:
-  - platform: homeassistant
-    id: outdoor_temp
-    entity_id: sensor.YOUR_OUTDOOR_TEMP_SENSOR
+# WiFi Configuration
+wifi_ssid: "Your-WiFi-SSID"
+wifi_password: "Your-WiFi-Password"
+
+# Fallback Access Point
+ap_ssid: "ESP32-Fallback"
+ap_password: "YourFallbackPassword"
+
+# Home Assistant Sensor Entity IDs
+ha_outdoor_temp: "sensor.your_outdoor_temperature"
+ha_outdoor_humidity: "sensor.your_outdoor_humidity"
+ha_wind_speed: "sensor.your_wind_speed"
+ha_indoor_temp: "sensor.your_indoor_temperature"
 ```
 
-### 4. Validate Configuration
+**Important**: The `secrets.yaml` file is excluded from git to protect your credentials. Never commit it to version control.
+
+### 3. Validate Configuration
 
 ```bash
 esphome config clock-with-temp.yaml
@@ -110,7 +113,7 @@ esphome config clock-with-temp.yaml
 
 Expected output: `Configuration is valid!`
 
-### 5. Build and Flash
+### 4. Build and Flash
 
 First-time flash via USB:
 
@@ -203,8 +206,12 @@ Other nighttime-friendly options:
 ```
 esphome-examples/
 ├── clock-with-temp.yaml    # Main ESPHome configuration
+├── secrets.yaml           # Your credentials (not in git - create from .example)
+├── secrets.yaml.example   # Template for secrets file
 ├── status.md              # Development notes and handoff
 ├── README.md              # This file
+├── .gitignore             # Excludes secrets.yaml from version control
+├── LICENSE                # MIT License
 ├── fonts/
 │   └── Montserrat-Bold.ttf  # Custom font for large text (216pt, 96pt, 24pt)
 └── config/                # ESPHome config directory
@@ -221,10 +228,19 @@ esphome-examples/
 2. Look for `States: outdoor=...` debug lines
 3. Verify HA API connection and sensor entity IDs
 
+### Build Fails - Missing Secrets File
+
+**Cause**: `secrets.yaml` file not found or not configured.
+
+**Fix**:
+1. Copy the template: `cp secrets.yaml.example secrets.yaml`
+2. Edit `secrets.yaml` with your actual credentials
+3. Ensure the file is in the same directory as `clock-with-temp.yaml`
+
 ### WiFi Won't Connect
 
 **Fix**:
-1. Verify SSID and password in `clock-with-temp.yaml`
+1. Verify SSID and password in `secrets.yaml`
 2. Check serial output: `esphome logs clock-with-temp.yaml --device /dev/ttyACM0`
 3. Ensure 2.4GHz WiFi (ESP32 doesn't support 5GHz)
 
