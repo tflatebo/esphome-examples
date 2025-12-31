@@ -1,0 +1,35 @@
+substitutions:
+  device_name: esp32
+  friendly_name: Display
+
+esphome:
+  name: ${device_name}
+  friendly_name: ${friendly_name}
+
+esp32:
+  board: esp32s3box
+  framework:
+    type: esp-idf
+
+# Enable logging
+logger:
+
+# Enable Home Assistant API
+api:
+  password: ""
+
+ota:
+  - platform: esphome
+    password: ""
+
+wifi:
+  ssid: "Home on the range"
+  password: "Kitty conquers Annapolis in the fall"
+
+  # Enable fallback hotspot (captive portal) in case wifi connection fails
+  ap:
+    ssid: "Esp32 Fallback Hotspot"
+    password: "kLjdeO1RYkrZ"
+
+captive_portal:
+    

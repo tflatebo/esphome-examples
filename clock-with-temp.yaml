@@ -1,0 +1,368 @@
+esphome:
+  name: esp32
+
+
+esp32:
+  board: esp32s3box
+  framework:
+    type: esp-idf
+    advanced:
+      execute_from_psram: true
+
+# Enable PSRAM component for large LVGL framebuffers used by mipi_rgb displays.
+psram:
+  mode: octal
+  speed: 80MHZ
+  ignore_not_found: true
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
+  ap:
+    ssid: !secret ap_ssid
+    password: !secret ap_password
+
+
+logger:
+  level: INFO
+
+api:
+  password: ""
+  homeassistant_states: true
+
+ota:
+  - platform: esphome
+    password: ""
+
+# Use SNTP to get internet time. Set timezone to your local timezone.
+time:
+  - platform: sntp
+    id: sntp_time
+    timezone: "America/Chicago"
+
+
+
+# --- DISPLAY HARDWARE ---
+# This board uses an RGB (parallel/MIPI) interface. ESPHome has a preset for
+# many Waveshare ESP32-S3 boards. Pick the entry that matches your panel:
+#  - For the 1024x600 variant use: model: WAVESHARE-5-1024X600
+#  - If you have the 800x480 variant try the preset for your board or use the
+#    custom configuration (see ESPHome mipi_rgb docs).
+
+# I2C bus for touchscreen / peripherals (adjust pins if you wired different ones)
+i2c:
+  - id: bus_a
+    sda: 8
+    scl: 9
+    scan: true
+
+display:
+  - platform: mipi_rgb
+    model: ESP32-S3-TOUCH-LCD-7-800X480
+    id: my_display
+    update_interval: never
+    auto_clear_enabled: false
+    show_test_card: false
+    
+ch422g:
+  - id: ch422g0
+    i2c_id: bus_a
+
+sensor:
+  - platform: homeassistant
+    id: outdoor_temp
+    entity_id: !secret ha_outdoor_temp
+    internal: true
+
+  - platform: homeassistant
+    id: outdoor_humidity
+    entity_id: !secret ha_outdoor_humidity
+    internal: true
+
+  - platform: homeassistant
+    id: kstp_wind_speed
+    entity_id: !secret ha_wind_speed
+    internal: true
+
+  - platform: homeassistant
+    id: indoor_temp
+    entity_id: !secret ha_indoor_temp
+    internal: true
+
+  # Template sensors for temperature values and feels-like computation
+  - platform: template
+    name: "Outdoor Temperature F"
+    id: outdoor_temp_f
+    unit_of_measurement: "°F"
+    accuracy_decimals: 1
+    lambda: |-
+      if (isnan(id(outdoor_temp).state)) return NAN;
+      return id(outdoor_temp).state;
+
+  - platform: template
+    name: "Indoor Temperature F"
+    id: indoor_temp_f
+    unit_of_measurement: "°F"
+    accuracy_decimals: 1
+    lambda: |-
+      if (isnan(id(indoor_temp).state)) return NAN;
+      return id(indoor_temp).state;
+
+  - platform: template
+    name: "Outdoor Feels Like F"
+    id: outdoor_feels_like_f
+    unit_of_measurement: "°F"
+    accuracy_decimals: 1
+    lambda: |-
+      // Compute feels-like using outdoor temp (°F), outdoor humidity (%), and KSTP wind speed (mph)
+      // Use the Fahrenheit-normalized template sensor for calculations
+      double tf = id(outdoor_temp_f).state; // °F
+      double rh = id(outdoor_humidity).state; // %
+      double wind_mph = id(kstp_wind_speed).state; // mph
+      bool haveRh = !isnan(rh);
+      bool haveWind = !isnan(wind_mph);
+      if (isnan(tf)) return NAN;
+
+      // Heat index when hot and humidity available
+      if (tf >= 80.0 && haveRh) {
+        double T = tf;
+        double R = rh;
+        double HI = -42.379 + 2.04901523*T + 10.14333127*R - 0.22475541*T*R
+                    - 0.00683783*T*T - 0.05481717*R*R + 0.00122874*T*T*R
+                    + 0.00085282*T*R*R - 0.00000199*T*T*R*R;
+        if (R < 13.0 && T >= 80.0 && T <= 112.0) HI -= ((13.0 - R)/4.0) * sqrt((17.0 - fabs(T - 95.0))/17.0);
+        if (R > 85.0 && T >= 80.0 && T <= 87.0) HI += ((R - 85.0)/10.0) * ((87.0 - T)/5.0);
+        return HI;
+      }
+
+      // Wind chill when cold and wind available
+      if (tf <= 50.0 && haveWind && wind_mph > 3.0) {
+        double V = wind_mph;
+        double WC = 35.74 + 0.6215*tf - 35.75*pow(V,0.16) + 0.4275*tf*pow(V,0.16);
+        return WC;
+      }
+
+      // Fallback: ambient
+      return tf;
+
+# Custom fonts for larger text display
+font:
+  - file: "fonts/Montserrat-Bold.ttf"
+    id: montserrat_216
+    size: 216
+  - file: "fonts/Montserrat-Bold.ttf"
+    id: montserrat_96
+    size: 96
+  - file: "fonts/Montserrat-Bold.ttf"
+    id: montserrat_24
+    size: 24
+
+lvgl:
+  displays: [my_display]
+  update_interval: 30s
+  buffer_size: 40%
+  default_font: montserrat_14
+  style_definitions:
+    - id: screen_style
+      bg_color: 0x000000
+
+    - id: time_style
+      text_font: montserrat_216
+      align: CENTER
+      text_color: 0xFF9933  # Warm amber - optimal for nighttime viewing
+      #text_color: 0xFF7F00  # Orange
+      #text_color: 0xFFBF00  # Amber
+
+    - id: temp_desc_style
+      text_font: montserrat_24
+      align: CENTER
+      text_color: 0x888888
+
+    - id: temp_value_style
+      text_font: montserrat_96
+      align: CENTER
+      text_color: 0xFFFFFF
+
+    - id: container_style
+      bg_opa: TRANSP  # Transparent background
+      border_width: 0
+      pad_all: 0
+  pages:
+    - id: main_page
+      styles: screen_style
+      widgets:
+        - label:
+            id: time_label
+            styles: [time_style]
+            y: 20
+            align: TOP_MID
+            text: !lambda 'return id(sntp_time).now().strftime("%H:%M");'
+
+        # Temperature display container using flex layout
+        - obj:
+            align: BOTTOM_MID
+            y: -20
+            width: SIZE_CONTENT
+            height: SIZE_CONTENT
+            styles: [container_style]
+            layout:
+              type: FLEX
+              flex_flow: ROW
+              flex_align_main: CENTER
+              flex_align_cross: CENTER
+              pad_column: 40  # Horizontal spacing between columns (like CSS gap)
+              pad_row: 10     # Vertical spacing within columns
+            widgets:
+              # Outdoor temperature column
+              - obj:
+                  width: SIZE_CONTENT
+                  height: SIZE_CONTENT
+                  styles: [container_style]
+                  layout:
+                    type: FLEX
+                    flex_flow: COLUMN
+                    flex_align_main: CENTER
+                    flex_align_cross: CENTER
+                  widgets:
+                    - label:
+                        id: out_val_label
+                        styles: [temp_value_style]
+                        text: "--\u00B0F"
+                    - label:
+                        id: out_desc_label
+                        styles: [temp_desc_style]
+                        text: "Outside"
+
+              # Feels-like temperature column
+              - obj:
+                  width: SIZE_CONTENT
+                  height: SIZE_CONTENT
+                  styles: [container_style]
+                  layout:
+                    type: FLEX
+                    flex_flow: COLUMN
+                    flex_align_main: CENTER
+                    flex_align_cross: CENTER
+                  widgets:
+                    - label:
+                        id: feels_val_label
+                        styles: [temp_value_style]
+                        text: "--\u00B0F"
+                    - label:
+                        id: feels_desc_label
+                        styles: [temp_desc_style]
+                        text: "Feels like"
+
+              # Indoor temperature column
+              - obj:
+                  width: SIZE_CONTENT
+                  height: SIZE_CONTENT
+                  styles: [container_style]
+                  layout:
+                    type: FLEX
+                    flex_flow: COLUMN
+                    flex_align_main: CENTER
+                    flex_align_cross: CENTER
+                  widgets:
+                    - label:
+                        id: in_val_label
+                        styles: [temp_value_style]
+                        text: "--\u00B0F"
+                    - label:
+                        id: in_desc_label
+                        styles: [temp_desc_style]
+                        text: "Indoor"
+
+interval:
+  - interval: 15s
+    then:
+      - lambda: |-
+          std::string t = id(sntp_time).now().strftime("%H:%M");
+          lv_label_set_text(id(time_label), t.c_str());
+
+  - interval: 15s
+    then:
+      - lambda: |-
+          // Get temperature values from template sensors
+          double outf = id(outdoor_temp_f).state;
+          double feels = id(outdoor_feels_like_f).state;
+          double indoorf = id(indoor_temp_f).state;
+
+          char out_s[32];
+          char feels_s[32];
+          char in_s[32];
+          if (isnan(outf)) sprintf(out_s, "--\u00B0F"); else sprintf(out_s, "%.0f\u00B0F", outf);
+          if (isnan(feels)) sprintf(feels_s, "--\u00B0F"); else sprintf(feels_s, "%.0f\u00B0F", feels);
+          if (isnan(indoorf)) sprintf(in_s, "--\u00B0F"); else sprintf(in_s, "%.0f\u00B0F", indoorf);
+
+          ESP_LOGI("dashboard", "States: outdoor=%f humidity=%f wind=%f outdoor_f=%f feels_f=%f indoor_f=%f", id(outdoor_temp).state, id(outdoor_humidity).state, id(kstp_wind_speed).state, outf, feels, indoorf);
+          // Helper to compute interpolated color and apply to a label
+          auto apply_color = [&](auto label_id, double v) {
+            uint8_t r = 255, g = 255, b = 255;
+            if (!isnan(v)) {
+              if (v <= 0.0) { r = 0; g = 120; b = 255; }
+              else if (v < 32.0) {
+                double t = (v - 0.0) / (32.0 - 0.0);
+                // interpolate bright blue (0,120,255) -> medium blue (0,160,220)
+                r = 0;
+                g = (uint8_t)round(120 + (160 - 120) * t);
+                b = (uint8_t)round(255 + (220 - 255) * t);
+              } else if (v < 72.0) {
+                double t = (v - 32.0) / (72.0 - 32.0);
+                // interpolate blue (0,160,220) -> green (0,200,0)
+                r = 0;
+                g = (uint8_t)round(160 + (200 - 160) * t);
+                b = (uint8_t)round(220 + (0 - 220) * t);
+              } else if (v < 90.0) {
+                double t = (v - 72.0) / (90.0 - 72.0);
+                // interpolate green (0,200,0) -> red (255,40,0)
+                r = (uint8_t)round(0 + (255 - 0) * t);
+                g = (uint8_t)round(200 + (40 - 200) * t);
+                b = 0;
+              } else { // v >= 90
+                r = 255; g = 40; b = 0;
+              }
+            }
+            lv_obj_set_style_text_color(label_id, lv_color_make(r, g, b), LV_PART_MAIN);
+          };
+
+          // Update text and color for each value label
+          lv_label_set_text(id(out_val_label), out_s);
+          apply_color(id(out_val_label), outf);
+          lv_event_send(id(out_val_label), lvgl::lv_update_event, nullptr);
+
+          lv_label_set_text(id(feels_val_label), feels_s);
+          apply_color(id(feels_val_label), feels);
+          lv_event_send(id(feels_val_label), lvgl::lv_update_event, nullptr);
+
+          lv_label_set_text(id(in_val_label), in_s);
+          apply_color(id(in_val_label), indoorf);
+          lv_event_send(id(in_val_label), lvgl::lv_update_event, nullptr);
+
+  # Auto-dimming: reduce text brightness 50% between 10pm and 6am (keeps background black)
+  - interval: 1min
+    then:
+      - lambda: |-
+          auto now = id(sntp_time).now();
+          if (!now.is_valid()) return;  // Skip if time not synced yet
+
+          int hour = now.hour;
+          // Nighttime: 10pm (22:00) to 6am (06:00)
+          bool is_nighttime = (hour >= 22 || hour < 6);
+
+          // Set opacity: 50% for nighttime (127), 100% for daytime (255)
+          uint8_t opacity = is_nighttime ? 127 : 255;
+
+          // Apply opacity to all text labels (not the background)
+          lv_obj_set_style_text_opa(id(time_label), opacity, LV_PART_MAIN);
+          lv_obj_set_style_text_opa(id(out_val_label), opacity, LV_PART_MAIN);
+          lv_obj_set_style_text_opa(id(out_desc_label), opacity, LV_PART_MAIN);
+          lv_obj_set_style_text_opa(id(feels_val_label), opacity, LV_PART_MAIN);
+          lv_obj_set_style_text_opa(id(feels_desc_label), opacity, LV_PART_MAIN);
+          lv_obj_set_style_text_opa(id(in_val_label), opacity, LV_PART_MAIN);
+          lv_obj_set_style_text_opa(id(in_desc_label), opacity, LV_PART_MAIN);
+
+          ESP_LOGI("brightness", "Hour: %d, Nighttime: %s, Text Opacity: %d",
+                   hour, is_nighttime ? "yes" : "no", opacity);
+

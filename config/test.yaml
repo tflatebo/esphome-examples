@@ -1,0 +1,30 @@
+esphome:
+  name: esp32
+
+esp32:
+  board: waveshare_esp32s3_touch_lcd_128
+  framework:
+    type: esp-idf
+
+# Enable logging
+logger:
+
+# Enable Home Assistant API
+api:
+  password: ""
+
+ota:
+  - platform: esphome
+    password: ""
+
+wifi:
+  ssid: "Home on the range"
+  password: "Kitty conquers Annapolis in the fall"
+
+  # Enable fallback hotspot (captive portal) in case wifi connection fails
+  ap:
+    ssid: "Esp32 Fallback Hotspot"
+    password: "kLjdeO1RYkrZ"
+
+captive_portal:
+    
