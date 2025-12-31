@@ -92,6 +92,7 @@ sensor:
     id: outdoor_temp_f
     unit_of_measurement: "°F"
     accuracy_decimals: 1
+    update_interval: 5s
     lambda: |-
       if (isnan(id(outdoor_temp).state)) return NAN;
       return id(outdoor_temp).state;
@@ -101,6 +102,7 @@ sensor:
     id: indoor_temp_f
     unit_of_measurement: "°F"
     accuracy_decimals: 1
+    update_interval: 5s
     lambda: |-
       if (isnan(id(indoor_temp).state)) return NAN;
       return id(indoor_temp).state;
@@ -110,6 +112,7 @@ sensor:
     id: outdoor_feels_like_f
     unit_of_measurement: "°F"
     accuracy_decimals: 1
+    update_interval: 5s
     lambda: |-
       // Compute feels-like using outdoor temp (°F), outdoor humidity (%), and KSTP wind speed (mph)
       // Use the Fahrenheit-normalized template sensor for calculations
