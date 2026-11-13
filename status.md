@@ -1,25 +1,27 @@
 # ESPHome LVGL Dashboard — Status and Handoff
 
-Date: 2025-12-30 (Updated after major enhancements)
+Date: Updated after forecast, touch-navigation, and sun-dimming changes
 
 **Purpose**
 - Single-file snapshot and handoff notes for the LVGL-based ESPHome dashboard running on a Waveshare ESP32-S3 display. This file contains everything another engineer or LLM would need to pick up the work and continue development or debugging.
 
 **Quick Status**
 - Config file renamed: `dashboard.yaml` → `clock-with-temp.yaml`
-- Configuration validated and working
+- Previous configuration validated and working; forecast and touchscreen changes need a new build and device validation
 - Firmware size: ~1.3-1.5 MB (increased due to large custom fonts)
 - Device boots, detects PSRAM (8 MB), connects to Wi-Fi, and runs LVGL UI
 - Active files: [clock-with-temp.yaml](clock-with-temp.yaml), [fonts/Montserrat-Bold.ttf](fonts/Montserrat-Bold.ttf)
-- **Status**: Ready for deployment, fully functional with nighttime dimming
+- **Status**: Updated source; rebuild and flash before using the new screens
 
 **What This Dashboard Does**
 - Displays a massive 216pt warm amber clock (across-the-room readable)
 - Shows three temperature values: Outside, Feels-like, Indoor (96pt font, whole numbers)
 - Color-codes temperatures from blue (cold) → green (comfortable) → red (hot)
-- Automatically dims display 50% between 10pm-6am (text only, background stays black)
+- Shows today's forecast and the following three days from Home Assistant
+- Tap/swipe navigation returns to the home screen after 90 seconds of inactivity
+- Starts at 80% text opacity at sunset, drops 10 percentage points hourly to 50%, and returns to 100% at sunrise
 - Updates every 15 seconds
-- Calculates feels-like temperature using heat index or wind chill
+- Uses Home Assistant's generic display sensors, including its feels-like calculation
 
 **Major Changes from Previous Version**
 1. **Massive Font Increase**:
@@ -34,12 +36,15 @@ Date: 2025-12-30 (Updated after major enhancements)
    - No more manual coordinate calculations
    - Easy to adjust spacing without math
 
-3. **Nighttime Dimming**:
-   - Auto-dims text to 50% opacity between 10pm-6am
-   - Background stays pure black (0x000000)
-   - Uses `lv_obj_set_style_text_opa()` on individual labels
-   - Checks every 1 minute via interval lambda
-   - Configurable hours and opacity levels
+3. **Sun-Based Dimming**:
+   - Starts at 80% at sunset, drops by 10 percentage points hourly to a 50% floor
+   - Returns to 100% at sunrise; background stays pure black
+   - Reads elapsed minutes from `sensor.display_minutes_since_sunset`
+
+4. **Touch Navigation and Forecasts**:
+   - GT911 tap/swipe changes between home, today, and next-three-days pages
+   - Returns home after 90 seconds without touch
+   - Forecasts refresh every 30 minutes and when the HA API client connects
 
 4. **Display Improvements**:
    - Whole number temperatures (no decimals): `72°F` instead of `72.5°F`
@@ -108,15 +113,16 @@ main_page (black background)
 
 ### Sensors & Data Flow
 **Home Assistant Sensors**:
-- `outdoor_temp` → sensor.garage_temp_sensor_air_temperature
-- `outdoor_humidity` → sensor.garage_temp_sensor_humidity
-- `kstp_wind_speed` → sensor.kstp_wind_speed
-- `indoor_temp` → sensor.bedroom_temperature
+- `outdoor_temp` → `sensor.display_outdoor_temperature`
+- `indoor_temp` → `sensor.display_indoor_temperature`
+- `feels_like_temp` → `sensor.display_feels_like_temperature`
+- `minutes_since_sunset` → `sensor.display_minutes_since_sunset`
+- Daily forecasts → `weather.forecast_home` through `weather.get_forecasts`
 
 **Template Sensors**:
 - `outdoor_temp_f` - Passthrough (assumes HA provides °F)
 - `indoor_temp_f` - Passthrough
-- `outdoor_feels_like_f` - Calculates heat index (≥80°F) or wind chill (≤50°F)
+- `outdoor_feels_like_f` - Passes through the Home Assistant feels-like alias
 
 ### Intervals & Updates
 1. **Time Update** (15s):
@@ -130,10 +136,12 @@ main_page (black background)
    - Updates all six labels (3 values + 3 descriptors)
 
 3. **Brightness Control** (1min):
-   - Checks current hour from SNTP
-   - Nighttime: 10pm-6am (hour >= 22 || hour < 6)
-   - Sets opacity: 127 (50%) nighttime, 255 (100%) daytime
-   - Applies to all 7 text labels individually
+   - Reads minutes since sunset from Home Assistant
+   - Applies configurable start, hourly step, and minimum brightness to all text
+   - Returns to full brightness when the sun is up
+4. **Forecast Refresh**:
+   - Requests daily forecast data on API connect and every 30 minutes
+   - Displays today and the next three later dates
 
 ### Color Mapping
 Temperature-to-color interpolation:
@@ -149,7 +157,7 @@ Applied via `lv_obj_set_style_text_color()` in update lambda.
 - Time: `sntp_time`
 - Display: `my_display`
 - LVGL labels: `time_label`, `out_val_label`, `out_desc_label`, `feels_val_label`, `feels_desc_label`, `in_val_label`, `in_desc_label`
-- HA sensors: `outdoor_temp`, `outdoor_humidity`, `kstp_wind_speed`, `indoor_temp`
+- HA sensors: `outdoor_temp`, `indoor_temp`, `feels_like_temp`, `minutes_since_sunset`
 - Template sensors: `outdoor_temp_f`, `indoor_temp_f`, `outdoor_feels_like_f`
 
 **Build / Flash / Runtime Notes**
@@ -164,8 +172,7 @@ Applied via `lv_obj_set_style_text_color()` in update lambda.
 - Device detects PSRAM (8MB) at boot
 - Wi-Fi connects successfully
 - LVGL may show occasional long-operation warnings (~120-135ms) - harmless
-- Debug logs show sensor states: `INFO dashboard: States: outdoor=30.0 ...`
-- Brightness logs: `INFO brightness: Hour: 23, Nighttime: yes, Text Opacity: 127`
+- Debug logs show current temperatures and the minutes-since-sunset brightness
 - Display is readable from across the room with 216pt clock
 
 **Known Issues / Limitations**
@@ -175,10 +182,9 @@ Applied via `lv_obj_set_style_text_color()` in update lambda.
    - No GPIO access for software dimming
    - Workaround: Apply translucent tape or window tint film to reduce brightness
 
-2. **Touchscreen Not Configured**:
-   - GT911 touch driver not enabled
-   - No touch input or calibration present
-   - Can be added if needed for future UI controls
+2. **Forecast Access**:
+   - The ESPHome device must be allowed to perform Home Assistant actions
+   - The configured weather entity must provide a daily forecast
 
 3. **Update Intervals**:
    - Currently 15s for time/temperature
@@ -236,24 +242,20 @@ esphome clean clock-with-temp.yaml
 3. **PSRAM Detection**: Verify "PSRAM: 8MB" in boot logs
 4. **Wi-Fi Connection**: Confirm SSID and network connectivity
 5. **HA Sensors**: Check that all 4 sensors are returning values (not NaN)
-6. **Time Sync**: Verify SNTP synchronization for dimming to work
+6. **Sun Dimming**: Verify `sensor.display_minutes_since_sunset` is updating in Home Assistant
 7. **Display**: Text should be very large and easily readable
 
 **Configuration Customization**
 
 ### Adjust Font Sizes
-Edit `font:` section (lines 159-168) and corresponding `style_definitions`.
+Edit the `font:` section and corresponding `style_definitions`.
 
 ### Change Clock Color
 Edit line 182: `text_color: 0xFF9933` (current warm amber)
 - Other options: `0xFFBF00` (pure amber), `0xFF7F00` (orange), `0xCC3300` (soft red)
 
 ### Adjust Dimming Schedule
-Edit lines 365-369:
-```yaml
-bool is_nighttime = (hour >= 22 || hour < 6);  # Change hours
-uint8_t opacity = is_nighttime ? 127 : 255;    # Change opacity (0-255)
-```
+Edit `night_start_brightness`, `night_brightness_step`, and `night_min_brightness` in the `substitutions` at the top of `clock-with-temp.yaml`.
 
 ### Modify Update Intervals
 Edit lines 287, 293, 358:
@@ -283,20 +285,13 @@ sprintf(out_s, "%.0f°F", outf);  // Change %.0f to %.1f for one decimal
 4. ✅ **COMPLETED**: Code cleanup and simplification
 
 ### Future Enhancements
-1. **Touchscreen Support**:
-   - Enable GT911 driver in I2C configuration
-   - Add LVGL button widgets for manual brightness control
-   - Implement page navigation for additional info screens
-
-2. **Additional Display Pages**:
-   - Weather forecast (next 24 hours)
-   - Temperature graphs/trends
-   - Humidity and wind speed details
-   - Sunrise/sunset times
+1. Temperature graphs and humidity/wind details
+2. Weather icons and visual polish for forecast pages
+3. Touch-based settings for changing the dimming schedule
 
 3. **Adaptive Brightness**:
    - If light sensor available, auto-adjust based on ambient light
-   - Currently uses time-based dimming only
+   - Currently uses sun-based dimming
 
 4. **Configuration UI**:
    - Touch-based settings page
@@ -357,14 +352,14 @@ esphome-examples/
 - Timezone: America/Chicago (US Central Time)
 - HA sensors: Outdoor, humidity, wind, indoor temperature
 - Display resolution: 800x480 (7-inch)
-- Update intervals: 15s standard, 1min brightness check
-- Dimming hours: 10pm-6am (50% opacity)
+- Update intervals: 15s temperatures/clock, 30min forecasts, 1min brightness check
+- Dimming: 80% at sunset, 10-point hourly steps, 50% floor; 100% at sunrise
 
 **Hardware Notes**
 - CH422G IO expander controls LCD_BL, LCD_RST, TP_RST
 - Backlight is on/off only (no PWM brightness control without hardware mod)
 - PWR and DONE LEDs are hardware-controlled (cannot be software-dimmed)
-- Touchscreen present but GT911 driver not configured
+- GT911 touchscreen drives page navigation
 - USB-C power, OTA updates supported
 
 **Development Environment**
@@ -378,7 +373,7 @@ esphome-examples/
 - **Background**: Pure black (`0x000000`) for OLED-like appearance and power efficiency
 - **Temperature values**: White (`0xFFFFFF`) with dynamic color overlay for temperature indication
 - **Labels**: Medium gray (`0x888888`) for subtle hierarchy
-- **Nighttime**: 50% opacity maintains readability while reducing eye strain
+- **Nighttime**: Gradual sun-based text dimming maintains readability while reducing eye strain
 
 **Accessibility Features**
 - Extra-large text (216pt clock) readable from 10+ feet away
@@ -404,7 +399,7 @@ If you're resuming work on this project (as another coding agent or human):
 
 **Common User Requests & How to Handle**
 
-- *"Make text bigger/smaller"*: Edit font sizes in lines 159-168 and style definitions
+- *"Make text bigger/smaller"*: Edit font sizes and style definitions
 - *"Change colors"*: Edit color values in style definitions or temperature mapping
 - *"Adjust dimming hours"*: Edit line 366 nighttime hours
 - *"Add more sensors"*: Add homeassistant sensors and new LVGL labels in flex layout

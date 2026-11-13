@@ -4,13 +4,15 @@ A beautiful, eye-readable dashboard for ESP32-S3 displays showing time and tempe
 
 ## Overview
 
-This project implements a clean, modern dashboard on a 7-inch touchscreen display using ESPHome and LVGL. It displays:
+This project implements a touchscreen dashboard on a 7-inch display using ESPHome and LVGL. It displays:
 
-- **Massive digital clock** - Synced via SNTP (Internet time) in warm amber color
-- **Three temperature displays** - Outside, Feels-like, and Indoor
+- **Home screen** - Clock plus outside, feels-like, and indoor temperatures
+- **Today's forecast** - Condition, high/low, and precipitation chance
+- **Next three days** - Daily condition, high/low, and precipitation chance
+- **Touch navigation** - Tap or swipe between screens; returns home after 90 seconds
 - **Color-coded temperatures** - Blue (cold) → Green (comfortable) → Red (hot)
-- **Feels-like calculation** - Automatic heat index and wind chill based on weather conditions
-- **Automatic nighttime dimming** - Text dims to 50% between 10pm-6am (background stays black)
+- **Home Assistant data aliases** - Uses the generic `sensor.display_*` entities configured for the TC001
+- **Sun-based dimming** - Starts at 80% at sunset, drops 10 percentage points hourly to 50%, and returns to 100% at sunrise
 
 ![Dashboard Layout](https://img.shields.io/badge/Layout-800x480-blue) ![ESPHome](https://img.shields.io/badge/ESPHome-2025.12.3-green)
 
@@ -30,31 +32,32 @@ This project implements a clean, modern dashboard on a 7-inch touchscreen displa
   - ≥90°F: Bright red (very hot)
 
 ### Advanced Features
-- **Automatic Nighttime Dimming**:
-  - Text opacity reduces to 50% between 10pm-6am
-  - Background remains pure black for OLED-like effect
-  - Smooth transitions every minute
+- **Sun-based dimming**:
+  - Text opacity starts at 80% at sunset and steps down 10 percentage points each hour to 50%
+  - Returns to full brightness at sunrise
+  - The background remains black; dimming is applied to text
+  - Checks the Home Assistant sun state every minute
+- **Automatic home-screen return**: Touch interaction resets the 90-second inactivity timer
+- **Configurable intervals and dimming**: Adjust refresh, timeout, and brightness values in one `substitutions` block
 - **Flex Layout**: CSS-like positioning for easy customization
   - No manual coordinate calculations
   - Adjustable padding and gaps
 - **Optimized Update Intervals**:
   - Clock and temperatures update every 15 seconds
+  - Forecast refreshes every 30 minutes
   - Brightness check every 1 minute
 
 ### Sensors & Calculations
 - **Home Assistant Integration**: Pulls data from existing HA sensors
-- **Feels-like Temperature**: Automatically calculates:
-  - Heat index when ≥80°F with humidity data
-  - Wind chill when ≤50°F with wind data
-  - Falls back to ambient temperature otherwise
+- **Feels-like Temperature**: Reads `sensor.display_feels_like_temperature`, calculated centrally in Home Assistant
+- **Weather Forecast**: Requests daily forecasts from `weather.forecast_home`
 - **NaN Safety**: Displays `--°F` until sensor data is available
 
 ## Hardware Requirements
 
 - **MCU**: ESP32-S3 with PSRAM (8MB recommended)
 - **Display**: Waveshare ESP32-S3-TOUCH-LCD-7 (800x480)
-  - 7-inch MIPI RGB display
-  - Capacitive touch (GT911 driver - optional)
+  - 7-inch MIPI RGB display with GT911 capacitive touch
 - **Power**: USB-C or appropriate power supply
 - **Network**: WiFi connection for SNTP and Home Assistant
 
@@ -66,7 +69,7 @@ This project implements a clean, modern dashboard on a 7-inch touchscreen displa
 
 ### Home Assistant Sensors Required
 
-You'll need to configure these sensor entity IDs in your `secrets.yaml` file (see Installation step 2 below).
+The example uses the generic entities from the TC001 Home Assistant setup. Apply the HA template-sensor change in the `homeassistant-config` checkout so `sensor.display_minutes_since_sunset` is available. Configure the temperature aliases and weather entity in `secrets.yaml` (see Installation step 2).
 
 ## Installation
 
@@ -96,14 +99,16 @@ wifi_password: "Your-WiFi-Password"
 ap_ssid: "ESP32-Fallback"
 ap_password: "YourFallbackPassword"
 
-# Home Assistant Sensor Entity IDs
-ha_outdoor_temp: "sensor.your_outdoor_temperature"
-ha_outdoor_humidity: "sensor.your_outdoor_humidity"
-ha_wind_speed: "sensor.your_wind_speed"
-ha_indoor_temp: "sensor.your_indoor_temperature"
+# Generic Home Assistant display entities
+ha_outdoor_temp: "sensor.display_outdoor_temperature"
+ha_indoor_temp: "sensor.display_indoor_temperature"
+ha_feels_like_temp: "sensor.display_feels_like_temperature"
+ha_weather: "weather.forecast_home"
 ```
 
 **Important**: The `secrets.yaml` file is excluded from git to protect your credentials. Never commit it to version control.
+
+The Home Assistant ESPHome device entry must be allowed to perform Home Assistant actions so the ESP32 can call `weather.get_forecasts`.
 
 ### 3. Validate Configuration
 
@@ -160,18 +165,19 @@ The dashboard uses custom Montserrat Bold fonts:
 
 To adjust sizes, modify the `font:` section and corresponding `style_definitions`.
 
-### Nighttime Dimming
+### Sun-Based Dimming and Screen Timing
 
-Automatic dimming occurs between 10pm-6am at 50% opacity. To customize:
+Edit the `substitutions` at the top of `clock-with-temp.yaml`:
 
 ```yaml
-# Change hours: 10pm (22) and 6am (6)
-bool is_nighttime = (hour >= 22 || hour < 6);
-
-# Change dimming level (0-255):
-# 127 = 50%, 77 = 30%, 178 = 70%
-uint8_t opacity = is_nighttime ? 127 : 255;
+forecast_refresh_interval: 30min
+screen_timeout_seconds: "90"
+night_start_brightness: "80"
+night_brightness_step: "10"
+night_min_brightness: "50"
 ```
+
+Brightness is text opacity on the black background. The HA template sensor `sensor.display_minutes_since_sunset` supplies elapsed minutes since sunset (`-1` while the sun is up); the display applies the configured hourly steps and restores 100% at sunrise.
 
 ### Temperature Display Spacing
 
@@ -213,7 +219,7 @@ esphome-examples/
 ├── .gitignore             # Excludes secrets.yaml from version control
 ├── LICENSE                # MIT License
 ├── fonts/
-│   └── Montserrat-Bold.ttf  # Custom font for large text (216pt, 96pt, 24pt)
+│   └── Montserrat-Bold.ttf  # Custom font for 216pt, 96pt, 48pt, 24pt, and 18pt text
 └── config/                # ESPHome config directory
 ```
 
@@ -225,7 +231,7 @@ esphome-examples/
 
 **Fix**:
 1. Check ESPHome logs: `esphome logs clock-with-temp.yaml`
-2. Look for `States: outdoor=...` debug lines
+2. Look for `dashboard` temperature logs
 3. Verify HA API connection and sensor entity IDs
 
 ### Build Fails - Missing Secrets File
@@ -273,7 +279,7 @@ psram:
 **Fix**:
 1. Verify time is syncing: check logs for "Time synchronized"
 2. Ensure timezone is set correctly
-3. Look for `brightness:` log entries showing hour and opacity values
+3. Check `sensor.display_minutes_since_sunset` in Home Assistant and the ESPHome `brightness` logs
 
 ## Customization Ideas
 
@@ -285,13 +291,13 @@ Modify the nighttime hours or dimming percentage in the auto-dimming interval la
 
 Add additional `homeassistant` platform sensors and display them with new LVGL labels using flex layout.
 
-### Enable Touchscreen
+### Touchscreen Navigation
 
-Configure the GT911 touch driver in [clock-with-temp.yaml](clock-with-temp.yaml), then add LVGL button widgets for interaction.
+The GT911 touchscreen is configured in [clock-with-temp.yaml](clock-with-temp.yaml). Tap or swipe left to advance; swipe right goes back. After the configured inactivity timeout, the display returns to the home screen.
 
-### Multiple Pages
+### Forecast Source
 
-Add LVGL pages for graphs, weather forecasts, or other data using `lvgl.pages`.
+Change `ha_weather` in `secrets.yaml` to another Home Assistant weather entity that provides daily forecasts. The forecast screen shows the current day's entry and the next three later dates returned by `weather.get_forecasts`.
 
 ### Different Fonts
 
@@ -320,13 +326,13 @@ esphome clean clock-with-temp.yaml
 
 - **Firmware Size**: ~1.3-1.5 MB (larger fonts increase size)
 - **PSRAM Usage**: 8MB detected and used for LVGL framebuffers
-- **Update Cycle**: 15 seconds for clock and temperature data, 1 minute for brightness
+- **Update Cycle**: 15 seconds for clock and temperature data, 30 minutes for forecasts, 1 minute for brightness
 - **Build Time**: First build ~5-8 minutes (large font generation), subsequent builds ~45-90 seconds
 
 ## Technical Highlights
 
 - **Flex Layout**: Modern CSS-like positioning eliminates manual coordinate calculations
-- **Software Dimming**: LVGL opacity control provides smooth nighttime dimming without hardware modifications
+- **Software Dimming**: LVGL text opacity follows Home Assistant's sun state without hardware modifications
 - **Optimized Updates**: Separate intervals for time, temperature, and brightness checks
 - **Color Accuracy**: Temperature color-coding maintained during dimming via text opacity
 - **Simplified Code**: Removed duplicate heat index calculations and unused widgets

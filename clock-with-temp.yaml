@@ -1,5 +1,15 @@
+substitutions:
+  device_name: esp32
+  friendly_name: Display
+  forecast_refresh_interval: 30min
+  screen_timeout_seconds: "90"
+  night_start_brightness: "80"
+  night_brightness_step: "10"
+  night_min_brightness: "50"
+
 esphome:
-  name: esp32
+  name: ${device_name}
+  friendly_name: ${friendly_name}
 
 esp32:
   board: esp32s3box
@@ -28,6 +38,9 @@ logger:
 api:
   password: ""
   homeassistant_states: true
+  on_client_connected:
+    then:
+      - script.execute: update_weather_forecast
 
 ota:
   - platform: esphome
@@ -38,6 +51,9 @@ time:
   - platform: sntp
     id: sntp_time
     timezone: "America/Chicago"
+    on_time_sync:
+      then:
+        - script.execute: update_weather_forecast
 
 # --- DISPLAY HARDWARE ---
 # This board uses an RGB (parallel/MIPI) interface. ESPHome has a preset for
@@ -72,21 +88,21 @@ sensor:
     internal: true
 
   - platform: homeassistant
-    id: outdoor_humidity
-    entity_id: !secret ha_outdoor_humidity
-    internal: true
-
-  - platform: homeassistant
-    id: kstp_wind_speed
-    entity_id: !secret ha_wind_speed
-    internal: true
-
-  - platform: homeassistant
     id: indoor_temp
     entity_id: !secret ha_indoor_temp
     internal: true
 
-  # Template sensors for temperature values and feels-like computation
+  - platform: homeassistant
+    id: feels_like_temp
+    entity_id: !secret ha_feels_like_temp
+    internal: true
+
+  - platform: homeassistant
+    id: minutes_since_sunset
+    entity_id: sensor.display_minutes_since_sunset
+    internal: true
+
+  # Normalize display values and let Home Assistant calculate feels-like.
   - platform: template
     name: "Outdoor Temperature F"
     id: outdoor_temp_f
@@ -114,36 +130,8 @@ sensor:
     accuracy_decimals: 1
     update_interval: 5s
     lambda: |-
-      // Compute feels-like using outdoor temp (°F), outdoor humidity (%), and KSTP wind speed (mph)
-      // Use the Fahrenheit-normalized template sensor for calculations
-      double tf = id(outdoor_temp_f).state; // °F
-      double rh = id(outdoor_humidity).state; // %
-      double wind_mph = id(kstp_wind_speed).state; // mph
-      bool haveRh = !isnan(rh);
-      bool haveWind = !isnan(wind_mph);
-      if (isnan(tf)) return NAN;
-
-      // Heat index when hot and humidity available
-      if (tf >= 80.0 && haveRh) {
-        double T = tf;
-        double R = rh;
-        double HI = -42.379 + 2.04901523*T + 10.14333127*R - 0.22475541*T*R
-                    - 0.00683783*T*T - 0.05481717*R*R + 0.00122874*T*T*R
-                    + 0.00085282*T*R*R - 0.00000199*T*T*R*R;
-        if (R < 13.0 && T >= 80.0 && T <= 112.0) HI -= ((13.0 - R)/4.0) * sqrt((17.0 - fabs(T - 95.0))/17.0);
-        if (R > 85.0 && T >= 80.0 && T <= 87.0) HI += ((R - 85.0)/10.0) * ((87.0 - T)/5.0);
-        return HI;
-      }
-
-      // Wind chill when cold and wind available
-      if (tf <= 50.0 && haveWind && wind_mph > 3.0) {
-        double V = wind_mph;
-        double WC = 35.74 + 0.6215*tf - 35.75*pow(V,0.16) + 0.4275*tf*pow(V,0.16);
-        return WC;
-      }
-
-      // Fallback: ambient
-      return tf;
+      if (isnan(id(feels_like_temp).state)) return NAN;
+      return id(feels_like_temp).state;
 
 # Custom fonts for larger text display
 font:
@@ -154,14 +142,23 @@ font:
     id: montserrat_96
     size: 96
   - file: "fonts/Montserrat-Bold.ttf"
+    id: montserrat_48
+    size: 48
+  - file: "fonts/Montserrat-Bold.ttf"
     id: montserrat_24
     size: 24
+  - file: "fonts/Montserrat-Bold.ttf"
+    id: montserrat_18
+    size: 18
 
 lvgl:
   displays: [my_display]
+  touchscreens:
+    - touchscreen_id: my_touchscreen
   update_interval: 30s
   buffer_size: 40%
   default_font: montserrat_14
+  page_wrap: true
   style_definitions:
     - id: screen_style
       bg_color: 0x000000
@@ -185,6 +182,27 @@ lvgl:
       bg_opa: TRANSP  # Transparent background
       border_width: 0
       pad_all: 0
+
+    - id: forecast_date_style
+      text_font: montserrat_48
+      align: CENTER
+      text_color: 0xFF9933
+
+    - id: forecast_condition_style
+      text_font: montserrat_24
+      align: CENTER
+      text_color: 0xFFFFFF
+
+    - id: forecast_value_style
+      text_font: montserrat_48
+      align: CENTER
+      text_color: 0xFFFFFF
+
+    - id: forecast_detail_style
+      text_font: montserrat_18
+      align: CENTER
+      text_color: 0x888888
+
   pages:
     - id: main_page
       styles: screen_style
@@ -271,6 +289,330 @@ lvgl:
                         styles: [temp_desc_style]
                         text: "Indoor"
 
+        - obj:
+            width: 100%
+            height: 100%
+            align: TOP_LEFT
+            bg_opa: TRANSP
+            border_width: 0
+            on_click:
+              - script.execute: next_display_page
+            on_swipe_left:
+              - script.execute: next_display_page
+            on_swipe_right:
+              - script.execute: previous_display_page
+
+    - id: today_page
+      styles: screen_style
+      widgets:
+        - label:
+            id: today_date_label
+            styles: [forecast_date_style]
+            align: TOP_MID
+            y: 30
+            text: "TODAY"
+        - label:
+            id: today_condition_label
+            styles: [forecast_condition_style]
+            align: CENTER
+            y: -70
+            text: "Waiting for forecast"
+        - label:
+            id: today_high_low_label
+            styles: [forecast_value_style]
+            align: CENTER
+            y: 10
+            text: "-- / --"
+        - label:
+            id: today_precip_label
+            styles: [forecast_detail_style]
+            align: BOTTOM_MID
+            y: -35
+            text: "High / Low (°F)  |  Precipitation: --"
+        - obj:
+            width: 100%
+            height: 100%
+            align: TOP_LEFT
+            bg_opa: TRANSP
+            border_width: 0
+            on_click:
+              - script.execute: next_display_page
+            on_swipe_left:
+              - script.execute: next_display_page
+            on_swipe_right:
+              - script.execute: previous_display_page
+
+    - id: next_days_page
+      styles: screen_style
+      widgets:
+        - label:
+            styles: [forecast_date_style]
+            align: TOP_MID
+            y: 20
+            text: "NEXT 3 DAYS"
+        - obj:
+            align: CENTER
+            y: 20
+            width: 100%
+            height: SIZE_CONTENT
+            styles: [container_style]
+            layout:
+              type: FLEX
+              flex_flow: ROW
+              flex_align_main: CENTER
+              flex_align_cross: CENTER
+              pad_column: 12
+            widgets:
+              - obj:
+                  width: 30%
+                  height: SIZE_CONTENT
+                  styles: [container_style]
+                  layout:
+                    type: FLEX
+                    flex_flow: COLUMN
+                    flex_align_main: CENTER
+                    flex_align_cross: CENTER
+                    pad_row: 8
+                  widgets:
+                    - label:
+                        id: day1_date_label
+                        styles: [forecast_condition_style]
+                        text: "--"
+                    - label:
+                        id: day1_condition_label
+                        styles: [forecast_detail_style]
+                        text: "--"
+                    - label:
+                        id: day1_high_low_label
+                        styles: [forecast_value_style]
+                        text: "-- / --"
+                    - label:
+                        id: day1_precip_label
+                        styles: [forecast_detail_style]
+                        text: "--%"
+              - obj:
+                  width: 30%
+                  height: SIZE_CONTENT
+                  styles: [container_style]
+                  layout:
+                    type: FLEX
+                    flex_flow: COLUMN
+                    flex_align_main: CENTER
+                    flex_align_cross: CENTER
+                    pad_row: 8
+                  widgets:
+                    - label:
+                        id: day2_date_label
+                        styles: [forecast_condition_style]
+                        text: "--"
+                    - label:
+                        id: day2_condition_label
+                        styles: [forecast_detail_style]
+                        text: "--"
+                    - label:
+                        id: day2_high_low_label
+                        styles: [forecast_value_style]
+                        text: "-- / --"
+                    - label:
+                        id: day2_precip_label
+                        styles: [forecast_detail_style]
+                        text: "--%"
+              - obj:
+                  width: 30%
+                  height: SIZE_CONTENT
+                  styles: [container_style]
+                  layout:
+                    type: FLEX
+                    flex_flow: COLUMN
+                    flex_align_main: CENTER
+                    flex_align_cross: CENTER
+                    pad_row: 8
+                  widgets:
+                    - label:
+                        id: day3_date_label
+                        styles: [forecast_condition_style]
+                        text: "--"
+                    - label:
+                        id: day3_condition_label
+                        styles: [forecast_detail_style]
+                        text: "--"
+                    - label:
+                        id: day3_high_low_label
+                        styles: [forecast_value_style]
+                        text: "-- / --"
+                    - label:
+                        id: day3_precip_label
+                        styles: [forecast_detail_style]
+                        text: "--%"
+        - obj:
+            width: 100%
+            height: 100%
+            align: TOP_LEFT
+            bg_opa: TRANSP
+            border_width: 0
+            on_click:
+              - script.execute: next_display_page
+            on_swipe_left:
+              - script.execute: next_display_page
+            on_swipe_right:
+              - script.execute: previous_display_page
+
+globals:
+  - id: active_page
+    type: int
+    restore_value: no
+    initial_value: "0"
+  - id: last_interaction_ms
+    type: uint32_t
+    restore_value: no
+    initial_value: "0"
+  - id: last_navigation_ms
+    type: uint32_t
+    restore_value: no
+    initial_value: "0"
+
+touchscreen:
+  - platform: gt911
+    id: my_touchscreen
+    display: my_display
+
+script:
+  - id: next_display_page
+    mode: restart
+    then:
+      - if:
+          condition:
+            lambda: return millis() - id(last_navigation_ms) > 300;
+          then:
+            - lambda: |-
+                id(active_page) = (id(active_page) + 1) % 3;
+                id(last_interaction_ms) = millis();
+                id(last_navigation_ms) = millis();
+            - lvgl.page.next:
+                animation: OUT_LEFT
+                time: 300ms
+
+  - id: previous_display_page
+    mode: restart
+    then:
+      - if:
+          condition:
+            lambda: return millis() - id(last_navigation_ms) > 300;
+          then:
+            - lambda: |-
+                id(active_page) = (id(active_page) + 2) % 3;
+                id(last_interaction_ms) = millis();
+                id(last_navigation_ms) = millis();
+            - lvgl.page.previous:
+                animation: OUT_RIGHT
+                time: 300ms
+
+  - id: update_weather_forecast
+    mode: restart
+    then:
+      - homeassistant.action:
+          action: weather.get_forecasts
+          data:
+            entity_id: !secret ha_weather
+            type: daily
+          capture_response: true
+          on_success:
+            - lambda: |-
+                JsonObjectConst result = response["response"].as<JsonObjectConst>();
+                if (result.isNull() || result.size() == 0) {
+                  ESP_LOGW("weather", "Home Assistant returned no forecast response");
+                  return;
+                }
+
+                JsonObjectConst weather = result.begin()->value().as<JsonObjectConst>();
+                JsonArrayConst forecast = weather["forecast"].as<JsonArrayConst>();
+                if (forecast.isNull()) {
+                  ESP_LOGW("weather", "Forecast response did not contain a forecast array");
+                  return;
+                }
+
+                auto format_temperature = [](JsonVariantConst value) -> std::string {
+                  if (value.isNull()) return "--";
+                  char text[12];
+                  snprintf(text, sizeof(text), "%.0f", value.as<float>());
+                  return text;
+                };
+
+                auto format_condition = [](std::string value) -> std::string {
+                  if (value == "partlycloudy") return "Partly cloudy";
+                  if (value == "clear-night") return "Clear night";
+                  if (value == "lightning-rainy") return "Thunderstorms";
+                  if (value == "snowy-rainy") return "Snow and rain";
+                  if (value == "windy-variant") return "Windy";
+                  if (value.empty()) return "--";
+                  value[0] = static_cast<char>(toupper(value[0]));
+                  return value;
+                };
+
+                auto format_date = [](const std::string &value) -> std::string {
+                  if (value.size() < 10) return "--";
+                  int year = atoi(value.substr(0, 4).c_str());
+                  int month = atoi(value.substr(5, 2).c_str());
+                  int day = atoi(value.substr(8, 2).c_str());
+                  static const int offsets[] = {0, 3, 2, 5, 0, 3, 5, 1, 4, 6, 2, 4};
+                  static const char *weekdays[] = {"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"};
+                  if (month < 1 || month > 12 || day < 1 || day > 31) return "--";
+                  if (month < 3) year--;
+                  int weekday = (year + year / 4 - year / 100 + year / 400 + offsets[month - 1] + day) % 7;
+                  char text[16];
+                  snprintf(text, sizeof(text), "%s %02d/%02d", weekdays[weekday], month, day);
+                  return text;
+                };
+
+                lv_label_set_text(id(today_condition_label), "No forecast");
+                lv_label_set_text(id(today_high_low_label), "-- / --");
+                lv_label_set_text(id(today_precip_label), "High / Low (F)  |  Precipitation: --");
+                lv_obj_t *date_labels[] = {id(day1_date_label), id(day2_date_label), id(day3_date_label)};
+                lv_obj_t *condition_labels[] = {id(day1_condition_label), id(day2_condition_label), id(day3_condition_label)};
+                lv_obj_t *high_low_labels[] = {id(day1_high_low_label), id(day2_high_low_label), id(day3_high_low_label)};
+                lv_obj_t *precip_labels[] = {id(day1_precip_label), id(day2_precip_label), id(day3_precip_label)};
+                for (int i = 0; i < 3; i++) {
+                  lv_label_set_text(date_labels[i], "--");
+                  lv_label_set_text(condition_labels[i], "--");
+                  lv_label_set_text(high_low_labels[i], "-- / --");
+                  lv_label_set_text(precip_labels[i], "--%");
+                }
+
+                std::string today = id(sntp_time).now().strftime("%Y-%m-%d");
+                bool found_today = false;
+                int next_day = 0;
+                for (JsonObjectConst item : forecast) {
+                  std::string datetime = item["datetime"].as<std::string>();
+                  if (datetime.size() < 10) continue;
+                  std::string date = datetime.substr(0, 10);
+                  std::string condition = format_condition(item["condition"].as<std::string>());
+                  std::string high = format_temperature(item["temperature"]);
+                  std::string low = format_temperature(item["templow"]);
+                  std::string precip = format_temperature(item["precipitation_probability"]);
+                  std::string high_low = high + " / " + low;
+                  std::string precip_text = precip + "%";
+
+                  if (date == today && !found_today) {
+                    found_today = true;
+                    lv_label_set_text(id(today_condition_label), condition.c_str());
+                    lv_label_set_text(id(today_high_low_label), high_low.c_str());
+                    std::string detail = "High / Low (F)  |  Precipitation: " + precip_text;
+                    lv_label_set_text(id(today_precip_label), detail.c_str());
+                  } else if (date > today && next_day < 3) {
+                    std::string date_text = format_date(date);
+                    lv_label_set_text(date_labels[next_day], date_text.c_str());
+                    lv_label_set_text(condition_labels[next_day], condition.c_str());
+                    lv_label_set_text(high_low_labels[next_day], high_low.c_str());
+                    lv_label_set_text(precip_labels[next_day], precip_text.c_str());
+                    next_day++;
+                  }
+                }
+
+                if (!found_today) {
+                  lv_label_set_text(id(today_condition_label), "Today's forecast unavailable");
+                }
+                ESP_LOGI("weather", "Updated forecast: today=%s, upcoming days=%d", found_today ? "available" : "unavailable", next_day);
+
 interval:
   # Update clock and temperatures every 15 seconds
   - interval: 15s
@@ -334,21 +676,38 @@ interval:
           apply_color(id(in_val_label), indoorf);
           lv_event_send(id(in_val_label), lvgl::lv_update_event, nullptr);
 
-  # Auto-dimming: reduce text brightness 50% between 10pm and 6am (keeps background black)
+  - interval: ${forecast_refresh_interval}
+    then:
+      - script.execute: update_weather_forecast
+
+  - interval: 1s
+    then:
+      - if:
+          condition:
+            lambda: |-
+              return id(active_page) != 0 &&
+                     (millis() - id(last_interaction_ms)) >= ${screen_timeout_seconds} * 1000UL;
+          then:
+            - lambda: |-
+                id(active_page) = 0;
+                id(last_interaction_ms) = millis();
+            - lvgl.page.show:
+                id: main_page
+                animation: OUT_RIGHT
+                time: 300ms
+
+  # Apply the Home Assistant sun-based brightness schedule to all text.
   - interval: 1min
     then:
       - lambda: |-
-          auto now = id(sntp_time).now();
-          if (!now.is_valid()) return;  // Skip if time not synced yet
+          int brightness = 100;
+          if (!isnan(id(minutes_since_sunset).state) && id(minutes_since_sunset).state >= 0) {
+            int elapsed_hours = static_cast<int>(id(minutes_since_sunset).state) / 60;
+            brightness = ${night_start_brightness} - elapsed_hours * ${night_brightness_step};
+            if (brightness < ${night_min_brightness}) brightness = ${night_min_brightness};
+          }
+          uint8_t opacity = static_cast<uint8_t>((brightness * 255 + 50) / 100);
 
-          int hour = now.hour;
-          // Nighttime: 10pm (22:00) to 6am (06:00)
-          bool is_nighttime = (hour >= 22 || hour < 6);
-
-          // Set opacity: 50% for nighttime (127), 100% for daytime (255)
-          uint8_t opacity = is_nighttime ? 127 : 255;
-
-          // Apply opacity to all text labels (not the background)
           lv_obj_set_style_text_opa(id(time_label), opacity, LV_PART_MAIN);
           lv_obj_set_style_text_opa(id(out_val_label), opacity, LV_PART_MAIN);
           lv_obj_set_style_text_opa(id(out_desc_label), opacity, LV_PART_MAIN);
@@ -356,7 +715,20 @@ interval:
           lv_obj_set_style_text_opa(id(feels_desc_label), opacity, LV_PART_MAIN);
           lv_obj_set_style_text_opa(id(in_val_label), opacity, LV_PART_MAIN);
           lv_obj_set_style_text_opa(id(in_desc_label), opacity, LV_PART_MAIN);
+          lv_obj_set_style_text_opa(id(today_date_label), opacity, LV_PART_MAIN);
+          lv_obj_set_style_text_opa(id(today_condition_label), opacity, LV_PART_MAIN);
+          lv_obj_set_style_text_opa(id(today_high_low_label), opacity, LV_PART_MAIN);
+          lv_obj_set_style_text_opa(id(today_precip_label), opacity, LV_PART_MAIN);
 
-          ESP_LOGI("brightness", "Hour: %d, Nighttime: %s, Text Opacity: %d",
-                   hour, is_nighttime ? "yes" : "no", opacity);
+          lv_obj_t *forecast_labels[] = {
+            id(day1_date_label), id(day1_condition_label), id(day1_high_low_label), id(day1_precip_label),
+            id(day2_date_label), id(day2_condition_label), id(day2_high_low_label), id(day2_precip_label),
+            id(day3_date_label), id(day3_condition_label), id(day3_high_low_label), id(day3_precip_label)
+          };
+          for (lv_obj_t *label : forecast_labels) {
+            lv_obj_set_style_text_opa(label, opacity, LV_PART_MAIN);
+          }
+
+          ESP_LOGI("brightness", "Minutes since sunset: %.0f, brightness: %d%%, opacity: %u",
+                   id(minutes_since_sunset).state, brightness, opacity);
 
