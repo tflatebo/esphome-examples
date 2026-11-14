@@ -600,7 +600,7 @@ script:
             - lambda: |-
                 std::string raw;
                 serializeJson(response, raw);
-                ESP_LOGI("weather", "Forecast response (%u bytes): %.300s", (unsigned) raw.size(), raw.c_str());
+                ESP_LOGD("weather", "Forecast response (%u bytes): %.300s", (unsigned) raw.size(), raw.c_str());
 
                 // Accept {"response": {"weather.x": {"forecast": [...]}}} or {"weather.x": {"forecast": [...]}}.
                 JsonObjectConst result = response["response"].is<JsonObjectConst>()

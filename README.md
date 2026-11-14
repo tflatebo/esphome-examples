@@ -7,12 +7,13 @@ A beautiful, eye-readable dashboard for ESP32-S3 displays showing time and tempe
 This project implements a touchscreen dashboard on a 7-inch display using ESPHome and LVGL. It displays:
 
 - **Home screen** - Clock plus outside, feels-like, and indoor temperatures
-- **Today's forecast** - Condition, high/low, and precipitation chance
-- **Next three days** - Daily condition, high/low, and precipitation chance
-- **Touch navigation** - Tap or swipe between screens; returns home after 90 seconds
+- **Today's forecast** - Condition, color-coded high/low, and precipitation (chance, or amount when the weather source has no chance)
+- **Next three days** - Daily condition, color-coded high/low, and precipitation
+- **Touch navigation** - Swipe left/right (or tap) between screens; returns home after 90 seconds
 - **Color-coded temperatures** - Blue (cold) → Green (comfortable) → Red (hot)
 - **Home Assistant data aliases** - Uses the generic `sensor.display_*` entities configured for the TC001
-- **Sun-based dimming** - Starts at 80% at sunset, drops 10 percentage points hourly to 50%, and returns to 100% at sunrise
+- **Sun-based dimming** - Starts at 80% at sunset, drops 10 percentage points hourly to 50%, then steps back up to 100% over the hour before sunrise
+- **Brightness in Home Assistant** - The current text brightness is reported as a `Text Brightness` sensor on the device page
 
 ![Dashboard Layout](https://img.shields.io/badge/Layout-800x480-blue) ![ESPHome](https://img.shields.io/badge/ESPHome-2025.12.3-green)
 
@@ -34,9 +35,9 @@ This project implements a touchscreen dashboard on a 7-inch display using ESPHom
 ### Advanced Features
 - **Sun-based dimming**:
   - Text opacity starts at 80% at sunset and steps down 10 percentage points each hour to 50%
-  - Returns to full brightness at sunrise
+  - Over the 60 minutes before sunrise it steps back up every 15 minutes (50% → 62% → 75% → 87%), reaching 100% at sunrise
   - The background remains black; dimming is applied to text
-  - Checks the Home Assistant sun state every minute
+  - Computed by the `Text Brightness` template sensor every minute and immediately whenever Home Assistant sends new sunrise/sunset values, so it is correct right after a reboot at night
 - **Automatic home-screen return**: Touch interaction resets the 90-second inactivity timer
 - **Configurable intervals and dimming**: Adjust refresh, timeout, and brightness values in one `substitutions` block
 - **Flex Layout**: CSS-like positioning for easy customization
@@ -45,12 +46,13 @@ This project implements a touchscreen dashboard on a 7-inch display using ESPHom
 - **Optimized Update Intervals**:
   - Clock and temperatures update every 15 seconds
   - Forecast refreshes every 30 minutes
-  - Brightness check every 1 minute
+  - Brightness recalculated every minute (and on new sun data)
 
 ### Sensors & Calculations
 - **Home Assistant Integration**: Pulls data from existing HA sensors
 - **Feels-like Temperature**: Reads `sensor.display_feels_like_temperature`, calculated centrally in Home Assistant
-- **Weather Forecast**: Requests daily forecasts from `weather.forecast_home`
+- **Weather Forecast**: Requests daily forecasts from `weather.forecast_home`; a `Refresh Forecast` button on the device page requests one immediately
+- **Shared color scale**: `temperature_color.h` maps °F to a color for both the main screen and the forecast pages
 - **NaN Safety**: Displays `--°F` until sensor data is available
 
 ## Hardware Requirements
@@ -69,7 +71,14 @@ This project implements a touchscreen dashboard on a 7-inch display using ESPHom
 
 ### Home Assistant Sensors Required
 
-The example uses the generic entities from the TC001 Home Assistant setup. Apply the HA template-sensor change in the `homeassistant-config` checkout so `sensor.display_minutes_since_sunset` is available. Configure the temperature aliases and weather entity in `secrets.yaml` (see Installation step 2).
+The example uses the generic entities from the TC001 Home Assistant setup (`templates.yaml` in the `homeassistant-config` repo). Besides the temperature aliases, dimming needs two template sensors derived from `sun.sun`:
+
+| Entity | Value |
+|---|---|
+| `sensor.display_minutes_since_sunset` | Minutes since sunset while the sun is down, `-1` otherwise |
+| `sensor.display_minutes_until_sunrise` | Minutes until sunrise while the sun is down, `-1` otherwise |
+
+Configure the temperature aliases and weather entity in `secrets.yaml` (see Installation step 2).
 
 ## Installation
 
@@ -108,7 +117,9 @@ ha_weather: "weather.forecast_home"
 
 **Important**: The `secrets.yaml` file is excluded from git to protect your credentials. Never commit it to version control.
 
-The Home Assistant ESPHome device entry must be allowed to perform Home Assistant actions so the ESP32 can call `weather.get_forecasts`.
+The Home Assistant ESPHome device entry must be allowed to perform Home Assistant actions so the ESP32 can call `weather.get_forecasts`: **Settings → Devices & Services → ESPHome → (device) → Configure → "Allow the device to perform Home Assistant actions"**. This setting resets if the device is deleted and re-added.
+
+If Home Assistant and the display are on different subnets/VLANs, mDNS discovery won't find the device. Add it manually by IP (port 6053) and give it a DHCP reservation so the address doesn't change.
 
 ### 3. Validate Configuration
 
@@ -126,11 +137,13 @@ First-time flash via USB:
 esphome run clock-with-temp.yaml --device /dev/ttyACM0
 ```
 
-Subsequent updates can use OTA:
+Subsequent updates can use OTA. Prefer the device's IP over `esp32.local`, which can resolve to a different device:
 
 ```bash
-esphome run clock-with-temp.yaml
+esphome run clock-with-temp.yaml --device <device-ip>
 ```
+
+`temperature_color.h` must sit next to `clock-with-temp.yaml`; it is pulled in with `esphome: includes:`.
 
 ## Configuration
 
@@ -160,8 +173,11 @@ interval:
 
 The dashboard uses custom Montserrat Bold fonts:
 - Clock: 216pt (extra large for across-the-room visibility)
-- Temperature values: 96pt
-- Labels (Outside/Feels like/Indoor): 24pt
+- Temperature values and today's forecast high/low: 96pt
+- Next-3-days high/low: 64pt
+- Page titles and today's condition: 48pt
+- Next-3-days dates: 36pt
+- Labels, conditions, and precipitation: 24pt
 
 To adjust sizes, modify the `font:` section and corresponding `style_definitions`.
 
@@ -175,9 +191,11 @@ screen_timeout_seconds: "90"
 night_start_brightness: "80"
 night_brightness_step: "10"
 night_min_brightness: "50"
+morning_ramp_minutes: "60"   # start brightening this long before sunrise
+morning_step_minutes: "15"   # step size; should divide morning_ramp_minutes evenly
 ```
 
-Brightness is text opacity on the black background. The HA template sensor `sensor.display_minutes_since_sunset` supplies elapsed minutes since sunset (`-1` while the sun is up); the display applies the configured hourly steps and restores 100% at sunrise.
+Brightness is text opacity on the black background. Home Assistant supplies minutes since sunset and minutes until sunrise (both `-1` while the sun is up). The `Text Brightness` sensor applies the evening steps, then during the morning ramp steps from the night level to 100% in equal increments, never going darker than the evening schedule.
 
 ### Temperature Display Spacing
 
@@ -190,11 +208,11 @@ pad_row: 10     # Vertical spacing within columns
 
 ### Color Temperature Ranges
 
-Edit the interpolation ranges in the interval lambda to customize color transitions:
+The color scale lives in one place, `temperature_color()` in [temperature_color.h](temperature_color.h), and is used by both the main screen and the forecast pages. Forecast labels contain two temperatures, so `temperature_markup()` wraps each in LVGL recolor markup (`#rrggbb 42#`); those labels set `recolor: true`.
 
-```yaml
+```cpp
 if (v <= 0.0) { r = 0; g = 120; b = 255; }  // Very cold
-# ... modify ranges as desired
+// ... modify ranges as desired
 else { r = 255; g = 40; b = 0; }  // Very hot
 ```
 
@@ -212,6 +230,7 @@ Other nighttime-friendly options:
 ```
 esphome-examples/
 ├── clock-with-temp.yaml    # Main ESPHome configuration
+├── temperature_color.h    # Shared temperature color scale (C++ helper)
 ├── secrets.yaml           # Your credentials (not in git - create from .example)
 ├── secrets.yaml.example   # Template for secrets file
 ├── status.md              # Development notes and handoff
@@ -219,7 +238,7 @@ esphome-examples/
 ├── .gitignore             # Excludes secrets.yaml from version control
 ├── LICENSE                # MIT License
 ├── fonts/
-│   └── Montserrat-Bold.ttf  # Custom font for 216pt, 96pt, 48pt, 24pt, and 18pt text
+│   └── Montserrat-Bold.ttf  # Custom font for 216/96/64/48/36/24pt text
 └── config/                # ESPHome config directory
 ```
 
@@ -277,15 +296,29 @@ psram:
 ### Nighttime Dimming Not Working
 
 **Fix**:
-1. Verify time is syncing: check logs for "Time synchronized"
-2. Ensure timezone is set correctly
-3. Check `sensor.display_minutes_since_sunset` in Home Assistant and the ESPHome `brightness` logs
+1. Check the `brightness` log line: `Since sunset: … min, until sunrise: … min, brightness: …%`
+2. `nan` for either value means Home Assistant doesn't have that sensor. Install the current `templates.yaml` and reload template entities
+3. Compare with the `Text Brightness` sensor history in Home Assistant
+
+### Forecast Pages Stay Empty
+
+**Fix**:
+1. Enable "Allow the device to perform Home Assistant actions" on the device in Home Assistant
+2. Press `Refresh Forecast` and look for `weather` log lines. `weather.get_forecasts failed: …` gives Home Assistant's reason; no line at all usually means the action permission is off
+3. Confirm the entity works in **Developer Tools → Actions** with `weather.get_forecasts`, `type: daily`
+4. For the raw response, set `logger: level: DEBUG`
+
+### Temperatures Show `nan` After an OTA Update
+
+**Cause**: The device came back on a different IP and Home Assistant is still pointed at the old one.
+
+**Fix**: Update the ESPHome integration entry with the new IP and add a DHCP reservation.
 
 ## Customization Ideas
 
 ### Adjust Dimming Schedule
 
-Modify the nighttime hours or dimming percentage in the auto-dimming interval lambda.
+Change the `night_*` and `morning_*` values in `substitutions`.
 
 ### Add More Sensors
 
@@ -293,7 +326,7 @@ Add additional `homeassistant` platform sensors and display them with new LVGL l
 
 ### Touchscreen Navigation
 
-The GT911 touchscreen is configured in [clock-with-temp.yaml](clock-with-temp.yaml). Tap or swipe left to advance; swipe right goes back. After the configured inactivity timeout, the display returns to the home screen.
+The GT911 touchscreen is configured in [clock-with-temp.yaml](clock-with-temp.yaml) with its interrupt (GPIO4) and reset (CH422G EXIO1) pins. A single transparent object on LVGL's `top_layer` handles navigation for all pages: swipe left or tap to advance, swipe right to go back. It has `gesture_bubble: false`, without which LVGL sends swipes to the parent and the handlers never fire. After a swipe, the navigation scripts call `lv_indev_wait_release()` so the click on release doesn't advance a second page. After the configured inactivity timeout, the display returns to the home screen.
 
 ### Forecast Source
 
@@ -324,9 +357,9 @@ esphome clean clock-with-temp.yaml
 
 ## Performance Notes
 
-- **Firmware Size**: ~1.3-1.5 MB (larger fonts increase size)
+- **Firmware Size**: ~1.52 MB, about 83% of the 1.8 MB app partition (fonts are most of it)
 - **PSRAM Usage**: 8MB detected and used for LVGL framebuffers
-- **Update Cycle**: 15 seconds for clock and temperature data, 30 minutes for forecasts, 1 minute for brightness
+- **Update Cycle**: 15 seconds for clock and temperature data, 30 minutes for forecasts (plus on connect and on demand), 1 minute for brightness (plus on new sun data)
 - **Build Time**: First build ~5-8 minutes (large font generation), subsequent builds ~45-90 seconds
 
 ## Technical Highlights
@@ -360,12 +393,10 @@ For issues or questions:
 ## Contributing
 
 Improvements welcome! Consider:
-- Adding touchscreen support and UI controls
-- Implementing multiple display pages
-- Creating weather forecast integrations
+- Adding weather icons to the forecast pages
 - Adding graphs for temperature trends
 - Implementing adaptive brightness based on ambient light sensor
 
 ---
 
-Built with ESPHome 2025.12.3 | Last updated: 2025-12-30
+Built with ESPHome 2025.12.3 | Last updated: 2026-11-14
