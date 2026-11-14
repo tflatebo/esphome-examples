@@ -6,10 +6,15 @@ substitutions:
   night_start_brightness: "80"
   night_brightness_step: "10"
   night_min_brightness: "50"
+  # Morning: step up from the night level to 100% over this many minutes before sunrise.
+  morning_ramp_minutes: "60"
+  morning_step_minutes: "15"
 
 esphome:
   name: ${device_name}
   friendly_name: ${friendly_name}
+  includes:
+    - temperature_color.h
 
 esp32:
   board: esp32s3box
@@ -101,6 +106,17 @@ sensor:
     id: minutes_since_sunset
     entity_id: sensor.display_minutes_since_sunset
     internal: true
+    # Recompute brightness as soon as HA sends a value (e.g. right after boot),
+    # rather than waiting for the next 1-minute update.
+    on_value:
+      - component.update: text_brightness
+
+  - platform: homeassistant
+    id: minutes_until_sunrise
+    entity_id: sensor.display_minutes_until_sunrise
+    internal: true
+    on_value:
+      - component.update: text_brightness
 
   # Normalize display values and let Home Assistant calculate feels-like.
   - platform: template
@@ -133,6 +149,55 @@ sensor:
       if (isnan(id(feels_like_temp).state)) return NAN;
       return id(feels_like_temp).state;
 
+  # Sun-based text brightness: computed here once a minute, reported to Home
+  # Assistant (shows on the device page), and applied to every label.
+  - platform: template
+    name: "Text Brightness"
+    id: text_brightness
+    unit_of_measurement: "%"
+    icon: mdi:brightness-6
+    accuracy_decimals: 0
+    update_interval: 1min
+    lambda: |-
+      float since_sunset = id(minutes_since_sunset).state;
+      float until_sunrise = id(minutes_until_sunrise).state;
+      // Daytime (both sensors report -1 while the sun is up) or no data yet.
+      if (isnan(since_sunset) || since_sunset < 0) return 100;
+
+      // Evening: start dim, step down each hour, never below the floor.
+      int night = ${night_start_brightness} - (static_cast<int>(since_sunset) / 60) * ${night_brightness_step};
+      night = std::max(night, ${night_min_brightness});
+
+      // Morning: in the last ${morning_ramp_minutes} minutes before sunrise, step from
+      // the night level toward 100% every ${morning_step_minutes} minutes.
+      if (!isnan(until_sunrise) && until_sunrise >= 0 && until_sunrise < ${morning_ramp_minutes}) {
+        const int total_steps = ${morning_ramp_minutes} / ${morning_step_minutes};
+        int steps_done = (${morning_ramp_minutes} - static_cast<int>(until_sunrise)) / ${morning_step_minutes};
+        steps_done = std::min(steps_done, total_steps);
+        int morning = night + (100 - night) * steps_done / total_steps;
+        return morning;
+      }
+      return night;
+    on_value:
+      - lambda: |-
+          uint8_t opacity = static_cast<uint8_t>((static_cast<int>(x) * 255 + 50) / 100);
+          lv_obj_t *labels[] = {
+            id(time_label),
+            id(out_val_label), id(out_desc_label),
+            id(feels_val_label), id(feels_desc_label),
+            id(in_val_label), id(in_desc_label),
+            id(today_date_label), id(today_condition_label), id(today_high_low_label), id(today_precip_label),
+            id(next_days_title_label),
+            id(day1_date_label), id(day1_condition_label), id(day1_high_low_label), id(day1_precip_label),
+            id(day2_date_label), id(day2_condition_label), id(day2_high_low_label), id(day2_precip_label),
+            id(day3_date_label), id(day3_condition_label), id(day3_high_low_label), id(day3_precip_label),
+          };
+          for (lv_obj_t *label : labels) {
+            lv_obj_set_style_text_opa(label, opacity, LV_PART_MAIN);
+          }
+          ESP_LOGI("brightness", "Since sunset: %.0f min, until sunrise: %.0f min, brightness: %.0f%%, opacity: %u",
+                   id(minutes_since_sunset).state, id(minutes_until_sunrise).state, x, opacity);
+
 # Custom fonts for larger text display
 font:
   - file: "fonts/Montserrat-Bold.ttf"
@@ -148,8 +213,11 @@ font:
     id: montserrat_24
     size: 24
   - file: "fonts/Montserrat-Bold.ttf"
-    id: montserrat_18
-    size: 18
+    id: montserrat_64
+    size: 64
+  - file: "fonts/Montserrat-Bold.ttf"
+    id: montserrat_36
+    size: 36
 
 lvgl:
   displays: [my_display]
@@ -189,19 +257,44 @@ lvgl:
       text_color: 0xFF9933
 
     - id: forecast_condition_style
-      text_font: montserrat_24
+      text_font: montserrat_36
       align: CENTER
       text_color: 0xFFFFFF
 
     - id: forecast_value_style
+      text_font: montserrat_64
+      align: CENTER
+      text_color: 0xFFFFFF
+
+    - id: today_condition_style
       text_font: montserrat_48
       align: CENTER
       text_color: 0xFFFFFF
 
     - id: forecast_detail_style
-      text_font: montserrat_18
+      text_font: montserrat_24
       align: CENTER
       text_color: 0x888888
+
+  # A single full-screen touch target above every page handles navigation:
+  # swipe left = next page, swipe right = previous page, tap = next page.
+  # gesture_bubble must be off or LVGL hands swipes to the parent instead.
+  top_layer:
+    widgets:
+      - obj:
+          width: 100%
+          height: 100%
+          align: TOP_LEFT
+          bg_opa: TRANSP
+          border_width: 0
+          scrollable: false
+          gesture_bubble: false
+          on_click:
+            - script.execute: next_display_page
+          on_swipe_left:
+            - script.execute: next_display_page
+          on_swipe_right:
+            - script.execute: previous_display_page
 
   pages:
     - id: main_page
@@ -289,19 +382,6 @@ lvgl:
                         styles: [temp_desc_style]
                         text: "Indoor"
 
-        - obj:
-            width: 100%
-            height: 100%
-            align: TOP_LEFT
-            bg_opa: TRANSP
-            border_width: 0
-            on_click:
-              - script.execute: next_display_page
-            on_swipe_left:
-              - script.execute: next_display_page
-            on_swipe_right:
-              - script.execute: previous_display_page
-
     - id: today_page
       styles: screen_style
       widgets:
@@ -313,15 +393,16 @@ lvgl:
             text: "TODAY"
         - label:
             id: today_condition_label
-            styles: [forecast_condition_style]
+            styles: [today_condition_style]
             align: CENTER
-            y: -70
+            y: -100
             text: "Waiting for forecast"
         - label:
             id: today_high_low_label
-            styles: [forecast_value_style]
+            recolor: true
+            styles: [temp_value_style]
             align: CENTER
-            y: 10
+            y: 15
             text: "-- / --"
         - label:
             id: today_precip_label
@@ -329,23 +410,11 @@ lvgl:
             align: BOTTOM_MID
             y: -35
             text: "High / Low (°F)  |  Precipitation: --"
-        - obj:
-            width: 100%
-            height: 100%
-            align: TOP_LEFT
-            bg_opa: TRANSP
-            border_width: 0
-            on_click:
-              - script.execute: next_display_page
-            on_swipe_left:
-              - script.execute: next_display_page
-            on_swipe_right:
-              - script.execute: previous_display_page
-
     - id: next_days_page
       styles: screen_style
       widgets:
         - label:
+            id: next_days_title_label
             styles: [forecast_date_style]
             align: TOP_MID
             y: 20
@@ -353,7 +422,7 @@ lvgl:
         - obj:
             align: CENTER
             y: 20
-            width: 100%
+            width: SIZE_CONTENT
             height: SIZE_CONTENT
             styles: [container_style]
             layout:
@@ -361,10 +430,10 @@ lvgl:
               flex_flow: ROW
               flex_align_main: CENTER
               flex_align_cross: CENTER
-              pad_column: 12
+              pad_column: 20
             widgets:
               - obj:
-                  width: 30%
+                  width: 250
                   height: SIZE_CONTENT
                   styles: [container_style]
                   layout:
@@ -384,6 +453,7 @@ lvgl:
                         text: "--"
                     - label:
                         id: day1_high_low_label
+                        recolor: true
                         styles: [forecast_value_style]
                         text: "-- / --"
                     - label:
@@ -391,7 +461,7 @@ lvgl:
                         styles: [forecast_detail_style]
                         text: "--%"
               - obj:
-                  width: 30%
+                  width: 250
                   height: SIZE_CONTENT
                   styles: [container_style]
                   layout:
@@ -411,6 +481,7 @@ lvgl:
                         text: "--"
                     - label:
                         id: day2_high_low_label
+                        recolor: true
                         styles: [forecast_value_style]
                         text: "-- / --"
                     - label:
@@ -418,7 +489,7 @@ lvgl:
                         styles: [forecast_detail_style]
                         text: "--%"
               - obj:
-                  width: 30%
+                  width: 250
                   height: SIZE_CONTENT
                   styles: [container_style]
                   layout:
@@ -438,25 +509,13 @@ lvgl:
                         text: "--"
                     - label:
                         id: day3_high_low_label
+                        recolor: true
                         styles: [forecast_value_style]
                         text: "-- / --"
                     - label:
                         id: day3_precip_label
                         styles: [forecast_detail_style]
                         text: "--%"
-        - obj:
-            width: 100%
-            height: 100%
-            align: TOP_LEFT
-            bg_opa: TRANSP
-            border_width: 0
-            on_click:
-              - script.execute: next_display_page
-            on_swipe_left:
-              - script.execute: next_display_page
-            on_swipe_right:
-              - script.execute: previous_display_page
-
 globals:
   - id: active_page
     type: int
@@ -471,10 +530,22 @@ globals:
     restore_value: no
     initial_value: "0"
 
+button:
+  - platform: template
+    name: "Refresh Forecast"
+    on_press:
+      - script.execute: update_weather_forecast
+
 touchscreen:
   - platform: gt911
     id: my_touchscreen
     display: my_display
+    i2c_id: bus_a
+    # Waveshare ESP32-S3-Touch-LCD-7: TP_IRQ on GPIO4, TP_RST on CH422G EXIO1.
+    interrupt_pin: GPIO4
+    reset_pin:
+      ch422g: ch422g0
+      number: 1
 
 script:
   - id: next_display_page
@@ -488,6 +559,9 @@ script:
                 id(active_page) = (id(active_page) + 1) % 3;
                 id(last_interaction_ms) = millis();
                 id(last_navigation_ms) = millis();
+                // A swipe is followed by a click on release; ignore the rest of this touch.
+                lv_indev_t *indev = lv_indev_get_act();
+                if (indev != nullptr) lv_indev_wait_release(indev);
             - lvgl.page.next:
                 animation: OUT_LEFT
                 time: 300ms
@@ -503,6 +577,9 @@ script:
                 id(active_page) = (id(active_page) + 2) % 3;
                 id(last_interaction_ms) = millis();
                 id(last_navigation_ms) = millis();
+                // A swipe is followed by a click on release; ignore the rest of this touch.
+                lv_indev_t *indev = lv_indev_get_act();
+                if (indev != nullptr) lv_indev_wait_release(indev);
             - lvgl.page.previous:
                 animation: OUT_RIGHT
                 time: 300ms
@@ -516,26 +593,33 @@ script:
             entity_id: !secret ha_weather
             type: daily
           capture_response: true
+          on_error:
+            - lambda: |-
+                ESP_LOGW("weather", "weather.get_forecasts failed: %s", error.c_str());
           on_success:
             - lambda: |-
-                JsonObjectConst result = response["response"].as<JsonObjectConst>();
-                if (result.isNull() || result.size() == 0) {
-                  ESP_LOGW("weather", "Home Assistant returned no forecast response");
-                  return;
-                }
+                std::string raw;
+                serializeJson(response, raw);
+                ESP_LOGI("weather", "Forecast response (%u bytes): %.300s", (unsigned) raw.size(), raw.c_str());
 
-                JsonObjectConst weather = result.begin()->value().as<JsonObjectConst>();
-                JsonArrayConst forecast = weather["forecast"].as<JsonArrayConst>();
+                // Accept {"response": {"weather.x": {"forecast": [...]}}} or {"weather.x": {"forecast": [...]}}.
+                JsonObjectConst result = response["response"].is<JsonObjectConst>()
+                                             ? response["response"].as<JsonObjectConst>()
+                                             : response;
+                JsonArrayConst forecast;
+                for (JsonPairConst entry : result) {
+                  if (entry.value()["forecast"].is<JsonArrayConst>()) {
+                    forecast = entry.value()["forecast"].as<JsonArrayConst>();
+                    break;
+                  }
+                }
                 if (forecast.isNull()) {
                   ESP_LOGW("weather", "Forecast response did not contain a forecast array");
                   return;
                 }
 
-                auto format_temperature = [](JsonVariantConst value) -> std::string {
-                  if (value.isNull()) return "--";
-                  char text[12];
-                  snprintf(text, sizeof(text), "%.0f", value.as<float>());
-                  return text;
+                auto as_number = [](JsonVariantConst value) -> double {
+                  return value.isNull() ? NAN : value.as<double>();
                 };
 
                 auto format_condition = [](std::string value) -> std::string {
@@ -586,11 +670,19 @@ script:
                   if (datetime.size() < 10) continue;
                   std::string date = datetime.substr(0, 10);
                   std::string condition = format_condition(item["condition"].as<std::string>());
-                  std::string high = format_temperature(item["temperature"]);
-                  std::string low = format_temperature(item["templow"]);
-                  std::string precip = format_temperature(item["precipitation_probability"]);
-                  std::string high_low = high + " / " + low;
-                  std::string precip_text = precip + "%";
+                  std::string high_low = temperature_markup(as_number(item["temperature"])) + " / " +
+                                         temperature_markup(as_number(item["templow"]));
+                  // Prefer probability; Met.no only provides an amount (inches with imperial units).
+                  std::string precip_text = "--";
+                  if (!item["precipitation_probability"].isNull()) {
+                    char probability[8];
+                    snprintf(probability, sizeof(probability), "%.0f%%", as_number(item["precipitation_probability"]));
+                    precip_text = probability;
+                  } else if (!item["precipitation"].isNull()) {
+                    char amount[16];
+                    snprintf(amount, sizeof(amount), "%.2f in", item["precipitation"].as<float>());
+                    precip_text = amount;
+                  }
 
                   if (date == today && !found_today) {
                     found_today = true;
@@ -635,45 +727,17 @@ interval:
 
           ESP_LOGI("dashboard", "T: out=%.0f feels=%.0f in=%.0f", outf, feels, indoorf);
 
-          // Helper to compute temperature color gradient and apply to label
-          auto apply_color = [&](auto label_id, double v) {
-            uint8_t r = 255, g = 255, b = 255;
-            if (!isnan(v)) {
-              if (v <= 0.0) {
-                r = 0; g = 120; b = 255;  // Bright blue
-              } else if (v < 32.0) {
-                double t = v / 32.0;
-                r = 0;
-                g = (uint8_t)round(120 + 40 * t);
-                b = (uint8_t)round(255 - 35 * t);
-              } else if (v < 72.0) {
-                double t = (v - 32.0) / 40.0;
-                r = 0;
-                g = (uint8_t)round(160 + 40 * t);
-                b = (uint8_t)round(220 - 220 * t);
-              } else if (v < 90.0) {
-                double t = (v - 72.0) / 18.0;
-                r = (uint8_t)round(255 * t);
-                g = (uint8_t)round(200 - 160 * t);
-                b = 0;
-              } else {
-                r = 255; g = 40; b = 0;  // Bright red
-              }
-            }
-            lv_obj_set_style_text_color(label_id, lv_color_make(r, g, b), LV_PART_MAIN);
-          };
-
           // Update text and color for each temperature label
           lv_label_set_text(id(out_val_label), out_s);
-          apply_color(id(out_val_label), outf);
+          lv_obj_set_style_text_color(id(out_val_label), lv_color_hex(temperature_color(outf)), LV_PART_MAIN);
           lv_event_send(id(out_val_label), lvgl::lv_update_event, nullptr);
 
           lv_label_set_text(id(feels_val_label), feels_s);
-          apply_color(id(feels_val_label), feels);
+          lv_obj_set_style_text_color(id(feels_val_label), lv_color_hex(temperature_color(feels)), LV_PART_MAIN);
           lv_event_send(id(feels_val_label), lvgl::lv_update_event, nullptr);
 
           lv_label_set_text(id(in_val_label), in_s);
-          apply_color(id(in_val_label), indoorf);
+          lv_obj_set_style_text_color(id(in_val_label), lv_color_hex(temperature_color(indoorf)), LV_PART_MAIN);
           lv_event_send(id(in_val_label), lvgl::lv_update_event, nullptr);
 
   - interval: ${forecast_refresh_interval}
@@ -695,40 +759,3 @@ interval:
                 id: main_page
                 animation: OUT_RIGHT
                 time: 300ms
-
-  # Apply the Home Assistant sun-based brightness schedule to all text.
-  - interval: 1min
-    then:
-      - lambda: |-
-          int brightness = 100;
-          if (!isnan(id(minutes_since_sunset).state) && id(minutes_since_sunset).state >= 0) {
-            int elapsed_hours = static_cast<int>(id(minutes_since_sunset).state) / 60;
-            brightness = ${night_start_brightness} - elapsed_hours * ${night_brightness_step};
-            if (brightness < ${night_min_brightness}) brightness = ${night_min_brightness};
-          }
-          uint8_t opacity = static_cast<uint8_t>((brightness * 255 + 50) / 100);
-
-          lv_obj_set_style_text_opa(id(time_label), opacity, LV_PART_MAIN);
-          lv_obj_set_style_text_opa(id(out_val_label), opacity, LV_PART_MAIN);
-          lv_obj_set_style_text_opa(id(out_desc_label), opacity, LV_PART_MAIN);
-          lv_obj_set_style_text_opa(id(feels_val_label), opacity, LV_PART_MAIN);
-          lv_obj_set_style_text_opa(id(feels_desc_label), opacity, LV_PART_MAIN);
-          lv_obj_set_style_text_opa(id(in_val_label), opacity, LV_PART_MAIN);
-          lv_obj_set_style_text_opa(id(in_desc_label), opacity, LV_PART_MAIN);
-          lv_obj_set_style_text_opa(id(today_date_label), opacity, LV_PART_MAIN);
-          lv_obj_set_style_text_opa(id(today_condition_label), opacity, LV_PART_MAIN);
-          lv_obj_set_style_text_opa(id(today_high_low_label), opacity, LV_PART_MAIN);
-          lv_obj_set_style_text_opa(id(today_precip_label), opacity, LV_PART_MAIN);
-
-          lv_obj_t *forecast_labels[] = {
-            id(day1_date_label), id(day1_condition_label), id(day1_high_low_label), id(day1_precip_label),
-            id(day2_date_label), id(day2_condition_label), id(day2_high_low_label), id(day2_precip_label),
-            id(day3_date_label), id(day3_condition_label), id(day3_high_low_label), id(day3_precip_label)
-          };
-          for (lv_obj_t *label : forecast_labels) {
-            lv_obj_set_style_text_opa(label, opacity, LV_PART_MAIN);
-          }
-
-          ESP_LOGI("brightness", "Minutes since sunset: %.0f, brightness: %d%%, opacity: %u",
-                   id(minutes_since_sunset).state, brightness, opacity);
-
