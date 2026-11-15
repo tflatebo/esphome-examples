@@ -71,7 +71,7 @@ This project implements a touchscreen dashboard on a 7-inch display using ESPHom
 
 ### Home Assistant Sensors Required
 
-The example uses the generic entities from the TC001 Home Assistant setup (`templates.yaml` in the `homeassistant-config` repo). Besides the temperature aliases, dimming needs two template sensors derived from `sun.sun`:
+The example uses the generic entities from the TC001 Home Assistant setup (`packages/displays.yaml` in the `homeassistant-config` repo). Besides the temperature aliases, dimming needs two template sensors derived from `sun.sun`:
 
 | Entity | Value |
 |---|---|
@@ -297,7 +297,7 @@ psram:
 
 **Fix**:
 1. Check the `brightness` log line: `Since sunset: … min, until sunrise: … min, brightness: …%`
-2. `nan` for either value means Home Assistant doesn't have that sensor. Install the current `templates.yaml` and reload template entities
+2. `nan` for either value means Home Assistant doesn't have that sensor. Install the current `packages/displays.yaml` from `homeassistant-config` and restart Home Assistant
 3. Compare with the `Text Brightness` sensor history in Home Assistant
 
 ### Forecast Pages Stay Empty

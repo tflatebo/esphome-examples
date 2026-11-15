@@ -23,7 +23,7 @@ Handoff notes for the LVGL dashboard on a Waveshare ESP32-S3-Touch-LCD-7. Read t
 | `secrets.yaml.example` | Template for `secrets.yaml` (Wi-Fi, AP, HA entity IDs). `secrets.yaml` is gitignored |
 | `test.yaml` | Old minimal config, not used |
 
-Home Assistant side: `templates.yaml` in the `homeassistant-config` repo defines the `sensor.display_*` entities this device reads.
+Home Assistant side: `packages/displays.yaml` in the `homeassistant-config` repo defines the `sensor.display_*` entities this device reads.
 
 ## Hardware
 
@@ -95,7 +95,7 @@ esphome logs clock-with-temp.yaml --device <device-ip>    # logs over the API
 
 1. **Action permission**: forecasts need "Allow the device to perform Home Assistant actions" on the device in HA. Without it, HA drops the call silently, so neither `on_success` nor `on_error` runs. Deleting and re-adding the device resets the setting.
 2. **Different subnets**: the display is on the IoT VLAN, so HA can't discover it over mDNS. Add it by IP (port 6053) and keep a DHCP reservation. An IP change after OTA showed up as `nan` temperatures.
-3. **`nan` in the `brightness` log** means HA doesn't have that sun sensor. Install the current `templates.yaml` and reload template entities.
+3. **`nan` in the `brightness` log** means HA doesn't have that sun sensor. Install the current `packages/displays.yaml` and restart Home Assistant.
 4. **Flex centering**: a `width: 100%` flex row with percentage-width children packed to the left despite `flex_align_main: CENTER`. The fix was fixed-px children (250) in a `SIZE_CONTENT` row aligned `CENTER`.
 5. **Swipes**: LVGL objects bubble gestures to the parent by default (see Pages and navigation).
 
