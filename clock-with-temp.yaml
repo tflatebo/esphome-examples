@@ -2,7 +2,7 @@ substitutions:
   device_name: esp32
   friendly_name: Display
   forecast_refresh_interval: 30min
-  screen_timeout_seconds: "90"
+  screen_timeout_seconds: "30"
   night_start_brightness: "80"
   night_brightness_step: "10"
   night_min_brightness: "50"

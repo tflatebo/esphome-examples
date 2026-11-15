@@ -9,7 +9,7 @@ Handoff notes for the LVGL dashboard on a Waveshare ESP32-S3-Touch-LCD-7. Read t
 **Working on the device**, validated on 2026-11-14 with ESPHome 2025.12.3:
 - Main screen: clock plus outside, feels-like, and indoor temperatures, color-coded
 - Today and next-3-days forecast pages, with color-coded high/low
-- Swipe left/right (and tap) navigation, returning home after 90 s idle
+- Swipe left/right (and tap) navigation, returning home after 30 s idle
 - Sun-based text dimming with a morning ramp, reported to Home Assistant as `Text Brightness`
 - Firmware about 1.52 MB, 82.8% of the 1.8 MB app partition. Fonts are most of it, so check flash headroom before adding fonts.
 
