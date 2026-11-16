@@ -9,7 +9,7 @@ This project implements a touchscreen dashboard on a 7-inch display using ESPHom
 - **Home screen** - Clock plus outside, feels-like, and indoor temperatures
 - **Today's forecast** - Condition, color-coded high/low, and precipitation (chance, or amount when the weather source has no chance)
 - **Next three days** - Daily condition, color-coded high/low, and precipitation
-- **Touch navigation** - Swipe left/right (or tap) between screens; returns home after 30 seconds
+- **Touch navigation** - Swipe left/right (or tap) between screens; returns home after 60 seconds
 - **Color-coded temperatures** - Blue (cold) → Green (comfortable) → Red (hot)
 - **Home Assistant data aliases** - Uses the generic `sensor.display_*` entities shared by the room displays (`packages/displays.yaml` in `homeassistant-config`)
 - **Sun-based dimming** - Starts at 80% at sunset, drops 10 percentage points hourly to 50%, then steps back up to 100% over the hour before sunrise
@@ -38,7 +38,7 @@ This project implements a touchscreen dashboard on a 7-inch display using ESPHom
   - Over the 60 minutes before sunrise it steps back up every 15 minutes (50% → 62% → 75% → 87%), reaching 100% at sunrise
   - The background remains black; dimming is applied to text
   - Computed by the `Text Brightness` template sensor every minute and immediately whenever Home Assistant sends new sunrise/sunset values, so it is correct right after a reboot at night
-- **Automatic home-screen return**: Touch interaction resets the 30-second inactivity timer
+- **Automatic home-screen return**: Touch interaction resets the 60-second inactivity timer
 - **Configurable intervals and dimming**: Adjust refresh, timeout, and brightness values in one `substitutions` block
 - **Flex Layout**: CSS-like positioning for easy customization
   - No manual coordinate calculations
@@ -187,7 +187,7 @@ Edit the `substitutions` at the top of `clock-with-temp.yaml`:
 
 ```yaml
 forecast_refresh_interval: 30min
-screen_timeout_seconds: "30"
+screen_timeout_seconds: "60"
 night_start_brightness: "80"
 night_brightness_step: "10"
 night_min_brightness: "50"
