@@ -67,7 +67,7 @@ This project implements a touchscreen dashboard on a 7-inch display using ESPHom
 
 - [ESPHome](https://esphome.io/) 2025.12.3 or newer
 - [Home Assistant](https://www.home-assistant.io/) (for sensor data)
-- Python 3.8+ (for ESPHome)
+- Python 3.11+ (for ESPHome)
 
 ### Home Assistant Sensors Required
 
@@ -233,14 +233,66 @@ esphome-examples/
 ├── temperature_color.h    # Shared temperature color scale (C++ helper)
 ├── secrets.yaml           # Your credentials (not in git - create from .example)
 ├── secrets.yaml.example   # Template for secrets file
-├── status.md              # Development notes and handoff
+├── tools/check_config.sh  # Validate (and optionally compile) without a device
 ├── README.md              # This file
+├── AGENTS.md, CLAUDE.md   # Instructions for coding agents
 ├── .gitignore             # Excludes secrets.yaml from version control
 ├── LICENSE                # MIT License
 ├── fonts/
 │   └── Montserrat-Bold.ttf  # Custom font for 216/96/64/48/36/24pt text
 └── config/                # ESPHome config directory
 ```
+
+## How It Works
+
+### Hardware details
+- ESP32-S3 (`esp32s3box` board), 8 MB octal PSRAM, ESP-IDF framework
+- Display: ESPHome `mipi_rgb` preset `ESP32-S3-TOUCH-LCD-7-800X480`, which drives the
+  backlight/enable through the CH422G IO expander (EXIO2, EXIO6)
+- I2C bus: SDA GPIO8, SCL GPIO9 (CH422G and the GT911 touch controller)
+- GT911 touch: interrupt on GPIO4, reset on CH422G EXIO1
+- The backlight is on/off only, so "brightness" is text opacity on a black background
+- The PWR/DONE LEDs are wired to the charging chip and can't be dimmed
+
+### Pages and touch
+- Three LVGL pages (`main_page`, `today_page`, `next_days_page`) that wrap around.
+- One transparent full-screen object on LVGL's top layer handles navigation for all
+  pages: swipe left or tap = next, swipe right = previous. It needs
+  `gesture_bubble: false`, or LVGL hands swipes to the parent and they never fire.
+- After a swipe, LVGL also sends a click; the navigation scripts ignore the rest of
+  the touch so one swipe moves one page.
+
+### Forecast
+- Requested from Home Assistant (`weather.get_forecasts`) when HA connects, on time
+  sync, every 30 minutes, and from the **Refresh Forecast** button.
+- "Today" is the entry whose date matches the device's date; the next three later
+  dates fill the three-day page. Precipitation shows the chance if the weather source
+  provides it, otherwise the amount in inches (Met.no only provides amounts).
+
+### Temperature colors
+`temperature_color.h` holds the only copy of the color scale (blue → green → red).
+The main screen colors each label; forecast labels contain two numbers, so each number
+is wrapped in LVGL color markup. The Home Assistant dashboard mirrors the same scale in
+`custom_templates/displays.jinja` (homeassistant-config); change both together.
+
+### Dimming
+The `Text Brightness` template sensor computes brightness from the two HA sun sensors
+once a minute and as soon as either changes, applies it to every label, and reports it
+to Home Assistant. Every label that should dim needs an `id` and an entry in that
+sensor's label list.
+
+## Lessons Learned
+
+- **"Allow the device to perform Home Assistant actions"** must be on for forecasts.
+  Without it HA drops the request silently: no success, no error. Re-adding the device
+  in HA resets it.
+- **The display is on the IoT VLAN**, so HA can't discover it; it's added by IP (port
+  6053) with a DHCP reservation. Flash and read logs by IP too: `esp32.local` has
+  resolved to the wrong address before.
+- **Flex centering with percentage widths didn't center** in LVGL; the three-day row
+  uses fixed 250 px columns in a `SIZE_CONTENT` row aligned `CENTER`.
+- **Flash is ~83% full**, mostly fonts. Check `tools/check_config.sh --compile` before
+  adding fonts or sizes.
 
 ## Troubleshooting
 
@@ -339,6 +391,12 @@ Replace `fonts/Montserrat-Bold.ttf` with any TTF font, or download additional we
 ## Development Commands
 
 ```bash
+# Validate without a device (uses secrets.yaml.example if there's no secrets.yaml)
+tools/check_config.sh
+
+# Validate and compile, reporting flash use
+tools/check_config.sh --compile
+
 # Validate configuration
 esphome config clock-with-temp.yaml
 
@@ -387,16 +445,19 @@ This project uses:
 
 For issues or questions:
 1. Check [ESPHome Documentation](https://esphome.io/)
-2. Review [status.md](status.md) for detailed implementation notes
+2. See [How It Works](#how-it-works) and [Lessons Learned](#lessons-learned) above
 3. Consult [LVGL Documentation](https://docs.lvgl.io/)
 
 ## Contributing
 
 Improvements welcome! Consider:
 - Adding weather icons to the forecast pages
+- Showing wind and humidity on the today page
+- Computing sunrise/sunset on the device (ESPHome `sun` component) instead of in HA
+- Restricting font glyph sets to free flash
 - Adding graphs for temperature trends
 - Implementing adaptive brightness based on ambient light sensor
 
 ---
 
-Built with ESPHome 2025.12.3 | Last updated: 2026-11-14
+Built with ESPHome 2025.12.3 | Last updated: 2026-11-16
